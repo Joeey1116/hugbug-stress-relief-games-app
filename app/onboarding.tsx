@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   secondary: { borderRadius: 16, paddingVertical: 16, alignItems: 'center', borderWidth: 1, borderColor: '#2a2a2a', marginBottom: 8 },
   secondaryText: { color: '#ffffff', fontSize: 15, fontWeight: '700' },
   privacyLink: { color: '#888888', fontSize: 13, textAlign: 'center', marginTop: 12, textDecorationLine: 'underline' },
-  footer: { paddingBottom: 8 },
+  footer: { paddingTop: 20, paddingBottom: 8 },
   dots: { flexDirection: 'row', justifyContent: 'center', marginBottom: 20 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#333333', marginHorizontal: 5 },
   dotActive: { backgroundColor: '#ffffff', width: 24 },
