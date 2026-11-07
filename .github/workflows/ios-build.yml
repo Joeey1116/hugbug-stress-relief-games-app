@@ -163,7 +163,7 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$DIST_SIGN_IDENTITY" \
-            PROVISIONING_PROFILE_SPECIFIER="Hugbug App Store" \
+            PROVISIONING_PROFILE_SPECIFIER="HugBug App" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
 
       - name: Export the IPA
@@ -194,7 +194,7 @@ jobs:
             <key>provisioningProfiles</key>
             <dict>
               <key>com.beatrackfaminc.hugbug</key>
-              <string>Hugbug App Store</string>
+              <string>HugBug App</string>
             </dict>
           </dict>
           </plist>
