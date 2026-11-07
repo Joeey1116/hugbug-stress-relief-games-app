@@ -1,0 +1,84 @@
+{
+  "expo": {
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0B1120",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "blockedPermissions": [
+        "com.google.android.gms.permission.AD_ID"
+      ],
+      "package": "com.beatrackfaminc.hugbug",
+      "permissions": [],
+      "versionCode": 1000
+    },
+    "extra": {
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "icon": "./assets/icon.png",
+    "ios": {
+      "buildNumber": "1000",
+      "bundleIdentifier": "com.beatrackfaminc.hugbug",
+      "deploymentTarget": "16.4",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSUserNotificationsUsageDescription": "Hugbug sends you gentle reminders to take a calm moment, breathe, or tend your garden.",
+        "UIDesignRequiresCompatibility": false
+      },
+      "supportsTablet": true
+    },
+    "name": "Hugbug: Stress Relief Games",
+    "orientation": "portrait",
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Hugbug uses your photo library so you can set a profile photo."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0B1120",
+          "icon": "./assets/notification-icon.png"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "minSdkVersion": 24,
+            "targetSdkVersion": 36
+          },
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
+        }
+      ],
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "This identifier is used to personalize your Hugbug experience. We run no ads and no third-party trackers — it stays off unless you turn it on."
+        }
+      ],
+      "./plugins/with-privacy-manifest",
+      "expo-asset"
+    ],
+    "scheme": "hugbug",
+    "slug": "hugbug-games",
+    "userInterfaceStyle": "dark",
+    "version": "1.0.0",
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
