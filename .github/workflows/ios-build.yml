@@ -10,6 +10,16 @@ name: Build iOS IPA (Hugbug)
 #   2. In Apple Developer / App Store Connect, create an API key and add
 #      these four repo secrets (Settings, Secrets and variables, Actions):
 #        ASC_API_KEY_ID, ASC_API_KEY_P8, ASC_API_ISSUER_ID, APPLE_TEAM_ID
+#   3. APP CLIP (bundle ID com.beatrackfaminc.hugbug.HugBug, App ID name
+#      "HugBug App Clip" — the App ID ALREADY EXISTS in the portal):
+#      the archive + export steps below reference a Distribution
+#      provisioning profile named exactly "HugBug App Clip" for that
+#      App ID, including the current Apple Distribution certificate
+#      (the Nov 6 one). STATUS UNCONFIRMED — Joey is checking the
+#      Profiles tab. If no such profile exists, create it with exactly
+#      that name BEFORE running this workflow, or the archive step
+#      will fail signing the clip. (-allowProvisioningUpdates fetches
+#      the profile automatically once it exists in the portal.)
 #
 # Pattern copied from the proven workflow in the main BeaTrackFam app repo
 # (Joeey1116/BeaTrackFam-Mobile-App/.github/workflows/ios-build.yml).
@@ -144,6 +154,14 @@ jobs:
         # Step-level cap: a healthy archive finishes well under this. If the
         # signing phase ever hangs again, this fails fast instead of burning
         # the whole job timeout in macOS minutes.
+        #
+        # NOTE (App Clip): the provisioning profiles are per-target in the
+        # project now (plugins/with-app-clip.js sets "HugBug App" on the
+        # main target and "HugBug App Clip" on the clip target). Do NOT
+        # pass PROVISIONING_PROFILE_SPECIFIER here — a command-line value
+        # overrides EVERY target and the clip would try to sign with the
+        # main app's profile. CODE_SIGN_IDENTITY / DEVELOPMENT_TEAM are
+        # still passed globally; they apply to both targets (same cert).
         timeout-minutes: 50
         env:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
@@ -163,8 +181,24 @@ jobs:
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$DIST_SIGN_IDENTITY" \
-            PROVISIONING_PROFILE_SPECIFIER="HugBug App" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+
+      - name: Verify the App Clip is in the archive (and under 15 MB)
+        # App Clips must be 15 MB or smaller. Fail fast here instead of
+        # finding out from App Store Connect after the upload.
+        run: |
+          CLIP="$GITHUB_WORKSPACE/build/HugbugStressReliefGames.xcarchive/Products/Applications/HugbugStressReliefGames.app/AppClips/HugbugClip.appclip"
+          if [ ! -d "$CLIP" ]; then
+            echo "::error::App Clip missing from the archive at $CLIP — the HugbugClip target did not build/embed. Check the archive log for the HugbugClip target."
+            exit 1
+          fi
+          SIZE_KB=$(du -sk "$CLIP" | cut -f1)
+          echo "App Clip size: ${SIZE_KB} KB"
+          if [ "$SIZE_KB" -gt 15360 ]; then
+            echo "::error::App Clip is ${SIZE_KB} KB — over Apple's 15 MB limit. It cannot ship."
+            exit 1
+          fi
+          echo "App Clip present and under the 15 MB limit."
 
       - name: Export the IPA
         env:
@@ -195,6 +229,8 @@ jobs:
             <dict>
               <key>com.beatrackfaminc.hugbug</key>
               <string>HugBug App</string>
+              <key>com.beatrackfaminc.hugbug.HugBug</key>
+              <string>HugBug App Clip</string>
             </dict>
           </dict>
           </plist>
