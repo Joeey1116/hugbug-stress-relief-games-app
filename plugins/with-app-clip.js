@@ -18,7 +18,13 @@
  *        HugbugClipApp.swift            — SwiftUI breathing experience
  *        HugbugClip-Info.plist         — clip Info.plist
  *        HugbugClip.entitlements       — on-demand-install-capable +
- *                                        parent-application-identifiers
+ *                                        parent-application-identifiers +
+ *                                        associated-domains
+ *                                        (applinks:beatrackfam.info,
+ *                                        CLIP ONLY — the parent app never
+ *                                        gets associated-appclip-app-
+ *                                        identifiers; declaring it breaks
+ *                                        the archive)
  *        Assets.xcassets/              — AppIcon (copied from
  *                                        assets/icon.png)
  *   2. Creates the HugbugClip native target. The `xcode` library
@@ -32,7 +38,11 @@
  *   4. Adds an "Embed App Clips" copy-files phase (dstSubfolderSpec 16
  *      = products directory, the value Xcode writes) to the main
  *      target, so `xcodebuild archive -scheme <main>` builds the clip
- *      and embeds it in the app bundle. The main target already
+ *      and embeds it in the app bundle. The phase carries the
+ *      EXPLICIT dstPath $(CONTENTS_FOLDER_PATH)/AppClips — the
+ *      dstPath "" form generated a phase Xcode never executed
+ *      (Rewards 2.0.0 archives, Nov 10 2026: clip built, never
+ *      embedded, ASC said HAS APP CLIP: NO). The main target already
  *      depends on the clip (addTarget wires that), so the clip builds
  *      first.
  *   5. Sets per-target provisioning (the workflow used to pass
@@ -50,6 +60,23 @@
  *      passed globally and applies to both targets.
  *   6. Adds the clip to the main scheme's BuildAction (archiving YES)
  *      so the archive includes it.
+ *
+ * AUDIT NOTES (Nov 10, 2026 — checked against the proven App Clip
+ * fixes in AGENTS.md, mirroring the main app's plugin):
+ *   - Clip UIDeviceFamily "1,2" = parent's (Universal); iPhone-only
+ *     fails ValidateEmbeddedBinary. Clip Info.plist carries
+ *     UISupportedInterfaceOrientations~ipad (all four) + UILaunchScreen
+ *     for the universal clip.
+ *   - Clip icon set = a single universal-1024 Contents.json entry.
+ *   - The clip's PBXGroup carries path = HugbugClip, so file refs
+ *     added with the full relative path resolve DOUBLED
+ *     (HugbugClip/HugbugClip/…) — the refs are patched to bare
+ *     basenames after each add (same fix as the main app plugin).
+ *   - addResourceFile is kept (xcode 4.0.0 guards the null Resources
+ *     group — correctForPath no-ops when the group is absent — and the
+ *     generated project proves it runs here); only its path is patched.
+ *   - The clip is pure SwiftUI: no React Native, no AppDelegate, no
+ *     pods, no bundle script in the clip target.
  *
  * PORTAL PREREQUISITES (Joey, before the first clip build):
  *   - Developer portal: App ID com.beatrackfaminc.hugbug.HugBug
@@ -304,6 +331,15 @@ const CLIP_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
 \t<array>
 \t\t<string>UIInterfaceOrientationPortrait</string>
 \t</array>
+\t<key>UISupportedInterfaceOrientations~ipad</key>
+\t<array>
+\t\t<string>UIInterfaceOrientationPortrait</string>
+\t\t<string>UIInterfaceOrientationPortraitUpsideDown</string>
+\t\t<string>UIInterfaceOrientationLandscapeLeft</string>
+\t\t<string>UIInterfaceOrientationLandscapeRight</string>
+\t</array>
+\t<key>UILaunchScreen</key>
+\t<dict/>
 </dict>
 </plist>
 `;
@@ -317,6 +353,10 @@ const CLIP_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 \t<key>com.apple.developer.parent-application-identifiers</key>
 \t<array>
 \t\t<string>${MAIN_BUNDLE_ID}</string>
+\t</array>
+\t<key>com.apple.developer.associated-domains</key>
+\t<array>
+\t\t<string>applinks:beatrackfam.info</string>
 \t</array>
 </dict>
 </plist>
@@ -466,23 +506,42 @@ function withAppClip(config) {
     project.addBuildPhase([], 'PBXSourcesBuildPhase', 'Sources', clipUuid);
     project.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', clipUuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', clipUuid);
-    project.addSourceFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}App.swift`, { target: clipUuid }, clipGroupKey);
-    project.addResourceFile(`${CLIP_TARGET_NAME}/Assets.xcassets`, { target: clipUuid }, clipGroupKey);
-    project.addFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}-Info.plist`, clipGroupKey);
-    project.addFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}.entitlements`, clipGroupKey, {
-      lastKnownFileType: 'text.plist.xml',
-    });
+    // addSourceFile / addResourceFile / addFile store the full relative
+    // path, but the clip's PBXGroup already carries path = HugbugClip,
+    // so the full path resolves DOUBLED (HugbugClip/HugbugClip/…) and
+    // Xcode can't find the files (same bug as the main app plugin,
+    // fixed there Nov 10 2026). Patch each ref to a bare basename.
+    const clipFiles = [
+      project.addSourceFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}App.swift`, { target: clipUuid }, clipGroupKey),
+      project.addResourceFile(`${CLIP_TARGET_NAME}/Assets.xcassets`, { target: clipUuid }, clipGroupKey),
+      project.addFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}-Info.plist`, clipGroupKey),
+      project.addFile(`${CLIP_TARGET_NAME}/${CLIP_TARGET_NAME}.entitlements`, clipGroupKey, {
+        lastKnownFileType: 'text.plist.xml',
+      }),
+    ];
+    for (const f of clipFiles) {
+      if (f && f.fileRef) {
+        const ref = project.hash.project.objects.PBXFileReference &&
+          project.hash.project.objects.PBXFileReference[f.fileRef];
+        if (ref) ref.path = `"${f.basename}"`;
+      }
+    }
 
     // 5. Embed the clip in the main app. 'watch2_app' here only selects
     // the products_directory destination (dstSubfolderSpec 16) — the
-    // exact value Xcode writes for "Embed App Clips".
+    // exact value Xcode writes for "Embed App Clips". The dstPath MUST
+    // be explicit: the dstPath "" form generated a phase Xcode never
+    // executed (Rewards 2.0.0 archives, Nov 10 2026 — clip built, never
+    // embedded, ASC said HAS APP CLIP: NO). The explicit
+    // $(CONTENTS_FOLDER_PATH)/AppClips destination is the form that
+    // actually runs.
     const embed = project.addBuildPhase(
       [`${CLIP_TARGET_NAME}.appclip`],
       'PBXCopyFilesBuildPhase',
       'Embed App Clips',
       mainTargetUuid,
       'watch2_app',
-      '',
+      '"$(CONTENTS_FOLDER_PATH)/AppClips"',
     );
     embed.buildPhase.dstSubfolderSpec = 16;
     // addBuildPhase builds the phase-entry comment from the product
