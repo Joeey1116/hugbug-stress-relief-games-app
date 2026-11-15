@@ -22,6 +22,9 @@
       "buildNumber": "1000",
       "bundleIdentifier": "com.beatrackfaminc.hugbug",
       "deploymentTarget": "16.4",
+      "entitlements": {
+        "com.apple.developer.game-center": true
+      },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSUserNotificationsUsageDescription": "Hugbug sends you gentle reminders to take a calm moment, breathe, or tend your garden.",
