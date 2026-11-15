@@ -10,7 +10,7 @@
       ],
       "package": "com.beatrackfaminc.hugbug",
       "permissions": [],
-      "versionCode": 1000
+      "versionCode": 1001
     },
     "extra": {
       "eas": {
@@ -19,7 +19,7 @@
     },
     "icon": "./assets/icon.png",
     "ios": {
-      "buildNumber": "1000",
+      "buildNumber": "1001",
       "bundleIdentifier": "com.beatrackfaminc.hugbug",
       "deploymentTarget": "16.4",
       "entitlements": {
