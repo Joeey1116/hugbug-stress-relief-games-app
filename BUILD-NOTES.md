@@ -2,7 +2,7 @@
 
 First working local build. Built Nov 7, 2026 by Gabi (Muse) from the plan at
 `~/workspace/beatrackfam-games/plan.md` and concept-visual-v2, copying the
-proven Rewards kit 1:1 (same Expo SDK, router, Supabase PKCE auth, NativeTabs
+proven Rewards kit 1:1 (same Expo SDK, router, Firebase Auth, NativeTabs
 Liquid Glass bar, GitHub Actions manual-dispatch builds).
 
 ## What was built
@@ -13,9 +13,10 @@ Liquid Glass bar, GitHub Actions manual-dispatch builds).
   all 11 by category + search), Breathe (guided sessions: Calm 4·4, Box
   4·4·4·4, Deep 4·7·8), You (profile, gentle progress, sounds mute toggle,
   reminders toggle, privacy policy, sign out).
-- **Auth:** consent-first onboarding, email sign-up/sign-in with PKCE
+- **Auth:** consent-first onboarding, email sign-up/sign-in with
   confirmation + password reset, Sign in with Apple (iOS, via
-  `expo-apple-authentication` → Supabase `signInWithIdToken`), session-guard
+  `expo-apple-authentication` → Firebase Apple credential) and Sign in
+  with Google (native sheet → Firebase Google credential), session-guard
   on the tabs (redirect to onboarding when signed out), App Tracking
   Transparency prompt (lazy-loaded — see "Bugs found" below).
 - **Game registry + template:** `lib/games/registry.ts` (id, name, tagline,
@@ -27,7 +28,7 @@ Liquid Glass bar, GitHub Actions manual-dispatch builds).
   Maze, Pattern Memory, Number Path, Breathing. Every game: no fail state,
   no timer, no score pressure, no ads. Gentle haptics on key moments.
 - **Progress:** tied to the account, cached in AsyncStorage for offline,
-  best-effort sync to Supabase `game_progress` when configured. Gentle
+  best-effort sync to Firestore `game_progress` (one doc per user). Gentle
   streaks that never punish a missed day. Calm Garden persists across
   visits; first tap plants a seed that sprouts immediately.
 - **Sounds:** 5 soft synthesized chimes in `assets/sounds/` (expo-audio,
@@ -37,7 +38,7 @@ Liquid Glass bar, GitHub Actions manual-dispatch builds).
   `assets/feature-graphic.png` 1024×500, `assets/splash.png`,
   `assets/favicon.png`, `assets/notification-icon.png`.
 - **Store files:** `whats-new-1.0.0.txt` (ends with the required contact
-  line), `supabase/schema.sql`, GitHub Actions `ios-build.yml` /
+  line), GitHub Actions `ios-build.yml` /
   `android-build.yml` / `release.yml` (manual trigger only), `eas.json`.
 - **Screenshots:** `docs/screenshots/` — onboarding, home (+ Stressed mood
   suggestion), games browse, breathe, you, and one game per category
@@ -46,12 +47,15 @@ Liquid Glass bar, GitHub Actions manual-dispatch builds).
 
 ## What's stubbed / placeholder
 
-- **Supabase values are PLACEHOLDERS** in `eas.json`
-  (`https://YOUR-HUGBUG-PROJECT.supabase.co` / `YOUR-HUGBUG-ANON-KEY`).
-  Until a real project is created, `lib/supabase.ts` returns a null client:
-  auth screens show their forms disabled and the app stays on onboarding.
-  The app still runs fully offline (games, garden, progress) once a
-  session exists. **Never reuse the Rewards Supabase project.**
+- **Firebase backend (Nov 15, 2026):** project "BeaTrackFam Apps"
+  (Spark/free), one project for all the new apps. iOS + Android apps
+  registered (`com.beatrackfaminc.hugbug`), config files
+  `google-services.json` / `GoogleService-Info.plist` at the repo root,
+  Auth providers Google + Apple enabled. **Firestore database still
+  needs creating in the Firebase console** (Firestore Database → Create
+  database, production mode) — until then, profile/progress sync is a
+  no-op and the app works fully offline with local progress. Auth works
+  without it.
 - **Bundle ID `com.beatrackfaminc.hugbug` is PROVISIONAL** — Joey must
   confirm before any store upload; bundle IDs can't change after first
   upload.
@@ -100,10 +104,10 @@ the native bar.
 
 ## Joey-only steps remaining
 
-1. **Supabase project:** create a DEDICATED project, run
-   `supabase/schema.sql`, allowlist `hugbug://confirmed` and
-   `hugbug://reset-password`, enable the Apple provider, put the real URL
-   + anon key in `eas.json`.
+1. **Firestore database:** create it in the Firebase console
+   ("BeaTrackFam Apps" project → Firestore Database → Create database,
+   production mode) so profile/progress sync works. Auth already works
+   without it.
 2. **Bundle ID:** confirm `com.beatrackfaminc.hugbug` (can't change after
    first upload).
 3. **App Store Connect:** create the app record, API key (secrets

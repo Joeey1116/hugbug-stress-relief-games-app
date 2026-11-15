@@ -10,7 +10,8 @@
       ],
       "package": "com.beatrackfaminc.hugbug",
       "permissions": [],
-      "versionCode": 1001
+      "versionCode": 1001,
+      "googleServicesFile": "./google-services.json"
     },
     "extra": {
       "eas": {
@@ -30,7 +31,8 @@
         "NSUserNotificationsUsageDescription": "Hugbug sends you gentle reminders to take a calm moment, breathe, or tend your garden.",
         "UIDesignRequiresCompatibility": false
       },
-      "supportsTablet": true
+      "supportsTablet": true,
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "name": "Hugbug: Stress Relief Games",
     "orientation": "portrait",
@@ -74,7 +76,10 @@
       ],
       "./plugins/with-privacy-manifest",
       "./plugins/with-app-clip",
-      "expo-asset"
+      "expo-asset",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "@react-native-google-signin/google-signin"
     ],
     "scheme": "hugbug",
     "slug": "hugbug-games",

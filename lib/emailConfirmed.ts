@@ -1,8 +1,32 @@
+import { reload } from '@react-native-firebase/auth';
+import { firebaseAuth } from './firebase';
+
 /**
- * Coordinates the signup-confirmation deep link between the root layout
- * (which exchanges the confirmation code for a session) and the rest of
- * the app: the auth gate waits for the fresh session instead of bouncing
- * to onboarding, and the home tab shows a one-time welcome message.
+ * Email verification, on Firebase Auth.
+ *
+ * Firebase confirmation links open a Firebase-hosted page (no deep link
+ * back into the app). The app learns the email is verified by reloading
+ * the user — the auth provider does this on every sign-in and on every
+ * auth-state change, and only then reports 'signedIn'.
+ */
+
+/** Reload the current user and report whether their email is verified. */
+export async function checkEmailVerified(): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user) return false;
+  try {
+    await reload(user);
+  } catch {
+    // Offline — fall back to the cached verification state.
+  }
+  return user.emailVerified;
+}
+
+/**
+ * Kept for the auth gate (app/index.tsx): flags the gate checks before
+ * routing. The old Supabase confirmation deep link set these; Firebase
+ * has no such link, so they are no longer set — the gate's checks are
+ * inert but harmless.
  */
 let confirmedPending = false;
 
@@ -20,10 +44,6 @@ export function takeEmailConfirmedPending(): boolean {
   return value;
 }
 
-/* A confirmation link was opened but did NOT establish a session (bad or
- * already-used code, dropped credentials). The account itself is usually
- * confirmed server-side by then, so the gate sends the user to sign in
- * instead of onboarding. */
 let confirmationFailed = false;
 
 export function markEmailConfirmationFailed() {

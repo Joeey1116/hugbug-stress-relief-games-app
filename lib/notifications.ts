@@ -76,12 +76,16 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 }
 
-/** Persist the push token on the user's profile (needs the push_token column). */
+/** Persist the push token on the user's profile document. */
 export async function savePushToken(userId: string, token: string): Promise<void> {
   try {
-    const { isSupabaseConfigured, supabase } = await import('./supabase');
-    if (!isSupabaseConfigured() || !supabase) return;
-    await supabase.from('profiles').update({ push_token: token }).eq('id', userId);
+    const { doc, serverTimestamp, setDoc } = await import('@react-native-firebase/firestore');
+    const { db } = await import('./firebase');
+    await setDoc(
+      doc(db, 'profiles', userId),
+      { push_token: token, updatedAt: serverTimestamp() },
+      { merge: true },
+    );
   } catch {
     // Non-fatal — the app works without a stored token.
   }

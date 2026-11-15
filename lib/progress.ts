@@ -1,13 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from './supabase';
+import { doc, serverTimestamp, setDoc } from '@react-native-firebase/firestore';
+import { db } from './firebase';
 
 /**
  * Progress — tied to the account, cached locally for offline.
  *
  * Local cache is the source of truth on-device (AsyncStorage). When
- * Supabase is configured, plays also upsert into `game_progress`
- * (user_id, game_id, plays, last_played) — best-effort, failures are
- * swallowed so a missing table never breaks a game.
+ * Firestore is reachable, plays also sync into the `game_progress`
+ * collection (one document per user, doc id = uid, holding the plays
+ * and lastPlayed maps) — best-effort, failures are swallowed so a
+ * missing database never breaks a game.
  *
  * Gentle streaks: a streak counts consecutive days with at least one
  * calm moment. A missed day never punishes — the streak simply rests
@@ -80,20 +82,16 @@ export async function recordCalmMoment(userId: string | null, gameId: string): P
     state.lastCalmDay = today;
   }
   await saveProgress(userId, state);
-  // Best-effort Supabase sync.
-  if (supabase && userId) {
+  // Best-effort Firestore sync — one document per user.
+  if (userId) {
     try {
-      await supabase.from('game_progress').upsert(
-        {
-          user_id: userId,
-          game_id: gameId,
-          plays: state.plays[gameId],
-          last_played: state.lastPlayed[gameId],
-        },
-        { onConflict: 'user_id,game_id' },
+      await setDoc(
+        doc(db, 'game_progress', userId),
+        { plays: state.plays, lastPlayed: state.lastPlayed, updatedAt: serverTimestamp() },
+        { merge: true },
       );
     } catch {
-      // Offline or table not created yet — local cache still has it.
+      // Offline or Firestore database not created yet — local cache still has it.
     }
   }
   return state;

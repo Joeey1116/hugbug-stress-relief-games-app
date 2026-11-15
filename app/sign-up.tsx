@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { router } from 'expo-router';
 import { Screen } from '../components/Screen';
 import { HugbugMark } from '../components/HugbugMark';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import { ensureProfile } from '../lib/profile';
-
-/** Where signup-confirmation emails send the user back (allowlisted in Supabase). */
-const CONFIRM_REDIRECT = 'hugbug://confirmed';
+import { SIGN_IN_CANCELLED_CODE, useAuth } from '../lib/auth';
 
 export default function SignUp() {
   const [email, setEmail] = useState('');
@@ -15,13 +11,26 @@ export default function SignUp() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
   const [resending, setResending] = useState(false);
   const [cooldownSecs, setCooldownSecs] = useState(0);
   const [needsConfirmation, setNeedsConfirmation] = useState(false);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const configured = isSupabaseConfigured();
+  const { signUpWithEmail, signInWithGoogle, signInWithApple, resendVerificationEmail } = useAuth();
 
   useEffect(() => {
+    if (Platform.OS === 'ios') {
+      (async () => {
+        try {
+          const AppleAuthentication = await import('expo-apple-authentication');
+          setAppleAvailable(await AppleAuthentication.isAvailableAsync());
+        } catch {
+          setAppleAvailable(false);
+        }
+      })();
+    }
     return () => {
       if (cooldownTimer.current) clearInterval(cooldownTimer.current);
     };
@@ -47,19 +56,11 @@ export default function SignUp() {
     setResending(true);
     setError('');
     try {
-      const { error: resendError } = await supabase!.auth.resend({
-        type: 'signup',
-        email: target,
-        options: { emailRedirectTo: CONFIRM_REDIRECT },
-      });
-      if (resendError) {
-        setError(resendError.message);
-        return;
-      }
-      setInfo(`Confirmation email resent to ${target} — tap the link in the email and you'll come right back into the app. Check your inbox and spam folder.`);
+      await resendVerificationEmail();
+      setInfo(`Confirmation email resent to ${target} — tap the link in the email to confirm, then sign in. Check your inbox and spam folder.`);
       startCooldown();
-    } catch {
-      setError('Could not resend the email. Check your connection and try again.');
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not resend the email. Check your connection and try again.');
     } finally {
       setResending(false);
     }
@@ -83,35 +84,54 @@ export default function SignUp() {
     }
     setLoading(true);
     try {
-      const { data, error: signUpError } = await supabase!.auth.signUp({
-        email: email.trim(),
-        password,
-        options: { emailRedirectTo: CONFIRM_REDIRECT },
-      });
-      if (signUpError) {
-        setError(signUpError.message);
+      const user = await signUpWithEmail(email.trim(), password);
+      // Email/password accounts are never verified at creation — the
+      // confirmation email is on its way and the app stays out of the
+      // tabs until the link is tapped and the user signs in.
+      if (user.emailVerified) {
+        router.replace('/(tabs)');
         return;
       }
-      // Supabase may require email confirmation — then there is no session yet
-      // and we must NOT try to touch the database (RLS would reject it).
-      if (!data.session || !data.user) {
-        setInfo(
-          `We sent a confirmation link to ${email.trim()} — tap it in your email and you'll come right back into the app. Check your inbox and spam folder.`,
-        );
-        setNeedsConfirmation(true);
-        return;
-      }
-      try {
-        await ensureProfile(data.user.id, email.trim());
-      } catch (profileError: any) {
-        setError(profileError?.message ?? 'Could not set up your profile. Try signing in.');
-        return;
-      }
-      router.replace('/(tabs)');
-    } catch {
-      setError('Could not create your account. Check your connection and try again.');
+      setInfo(
+        `We sent a confirmation link to ${email.trim()} — tap it in your email to confirm, then sign in. Check your inbox and spam folder.`,
+      );
+      setNeedsConfirmation(true);
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not create your account. Check your connection and try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  /** Create the account with Apple (iOS only) — verified by definition. */
+  const handleAppleSignUp = async () => {
+    setError('');
+    setAppleLoading(true);
+    try {
+      await signInWithApple();
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      if (err?.code !== SIGN_IN_CANCELLED_CODE && err?.code !== 'ERR_REQUEST_CANCELED') {
+        setError(err?.message ?? 'Apple sign-in did not complete. Try again, or create an account with email.');
+      }
+    } finally {
+      setAppleLoading(false);
+    }
+  };
+
+  /** Create the account with Google — verified by definition. */
+  const handleGoogleSignUp = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      if (err?.code !== SIGN_IN_CANCELLED_CODE) {
+        setError(err?.message ?? 'Google sign-in did not complete. Try again, or create an account with email.');
+      }
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -123,6 +143,26 @@ export default function SignUp() {
         <Text style={styles.subline}>It takes ten seconds. The calm lasts.</Text>
       </View>
 
+      {appleAvailable && (
+        <TouchableOpacity
+          style={[styles.appleBtn, appleLoading && styles.primaryDisabled]}
+          onPress={handleAppleSignUp}
+          disabled={appleLoading}
+          activeOpacity={0.8}
+        >
+          {appleLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.appleText}>  Continue with Apple</Text>}
+        </TouchableOpacity>
+      )}
+
+      <TouchableOpacity
+        style={[styles.googleBtn, googleLoading && styles.primaryDisabled]}
+        onPress={handleGoogleSignUp}
+        disabled={googleLoading}
+        activeOpacity={0.8}
+      >
+        {googleLoading ? <ActivityIndicator color="#000" /> : <Text style={styles.googleText}>G  Continue with Google</Text>}
+      </TouchableOpacity>
+
       <Text style={styles.label}>EMAIL</Text>
       <TextInput
         style={styles.input}
@@ -133,7 +173,6 @@ export default function SignUp() {
         keyboardType="email-address"
         autoCapitalize="none"
         autoCorrect={false}
-        editable={configured}
       />
       <Text style={styles.label}>PASSWORD</Text>
       <TextInput
@@ -143,7 +182,6 @@ export default function SignUp() {
         placeholder="At least 6 characters"
         placeholderTextColor="#555555"
         secureTextEntry
-        editable={configured}
       />
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -165,9 +203,9 @@ export default function SignUp() {
       )}
 
       <TouchableOpacity
-        style={[styles.primary, (!configured || loading) && styles.primaryDisabled]}
+        style={[styles.primary, loading && styles.primaryDisabled]}
         onPress={handleSignUp}
-        disabled={!configured || loading}
+        disabled={loading}
         activeOpacity={0.8}
       >
         {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.primaryText}>CREATE MY ACCOUNT</Text>}
@@ -205,6 +243,24 @@ const styles = StyleSheet.create({
   primary: { backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 17, alignItems: 'center', marginTop: 16 },
   primaryDisabled: { opacity: 0.4 },
   primaryText: { color: '#000000', fontSize: 16, fontWeight: '800', letterSpacing: 2 },
+  appleBtn: {
+    backgroundColor: '#000000',
+    borderWidth: 1,
+    borderColor: '#444444',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  appleText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  googleBtn: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  googleText: { color: '#000000', fontSize: 16, fontWeight: '700' },
   resend: { borderWidth: 1, borderColor: '#3a3a3a', borderRadius: 16, paddingVertical: 15, alignItems: 'center', marginTop: 12 },
   resendText: { color: '#ffffff', fontSize: 14, fontWeight: '800', letterSpacing: 2 },
   switch: { alignItems: 'center', marginTop: 18 },

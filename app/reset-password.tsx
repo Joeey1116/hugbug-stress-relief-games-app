@@ -1,35 +1,44 @@
 import { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { router } from 'expo-router';
+import { updatePassword } from '@react-native-firebase/auth';
 import { Screen } from '../components/Screen';
 import { HugbugMark } from '../components/HugbugMark';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { useAuth } from '../lib/auth';
 
 type Status = 'checking' | 'ready' | 'invalid';
 
+/**
+ * Set a new password while signed in (Firebase updatePassword).
+ *
+ * The old Supabase flow reset the password from an emailed deep link;
+ * Firebase's reset email instead opens a Firebase-hosted page where the
+ * new password is chosen, so this screen is no longer the reset landing
+ * page — it remains as the in-app "change password" screen for a
+ * signed-in user. The auth gate only routes here while a session exists.
+ */
 export default function ResetPassword() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
-  const configured = isSupabaseConfigured();
-  // The recovery session is established by AuthProvider (it processes
-  // the reset deep link before resolving auth status), so this screen
-  // just reads the shared state — no getSession() polling. 'checking'
-  // while the provider restores, 'ready' with a session, 'invalid'
-  // once auth has resolved with no session.
+  // The session is established by AuthProvider, so this screen just reads
+  // the shared state — no getSession() polling. 'checking' while the
+  // provider restores, 'ready' with a session, 'invalid' once auth has
+  // resolved with no session.
   const { status: authStatus, session } = useAuth();
-  const status: Status = !configured
-    ? 'invalid'
-    : session
-      ? 'ready'
-      : authStatus === 'loading'
-        ? 'checking'
-        : 'invalid';
+  const status: Status = session
+    ? 'ready'
+    : authStatus === 'loading'
+      ? 'checking'
+      : 'invalid';
 
   const handleSave = async () => {
     setMessage('');
+    if (!session) {
+      setMessage('You need to be signed in to change your password.');
+      return;
+    }
     if (password.length < 6) {
       setMessage('Password must be at least 6 characters.');
       return;
@@ -40,14 +49,12 @@ export default function ResetPassword() {
     }
     setSaving(true);
     try {
-      const { error: updateError } = await supabase!.auth.updateUser({ password });
-      if (updateError) {
-        setMessage(updateError.message);
-        return;
-      }
+      await updatePassword(session, password);
       router.replace('/(tabs)');
-    } catch {
-      setMessage('Could not update your password. Check your connection and try again.');
+    } catch (err: any) {
+      // A stale session needs a fresh sign-in first (Firebase requires a
+      // recent login to change the password).
+      setMessage(err?.message ?? 'Could not update your password. Check your connection and try again.');
     } finally {
       setSaving(false);
     }
@@ -64,15 +71,15 @@ export default function ResetPassword() {
       {status === 'checking' && (
         <View style={styles.center}>
           <ActivityIndicator color="#ffffff" size="large" />
-          <Text style={styles.checkingText}>Verifying your reset link…</Text>
+          <Text style={styles.checkingText}>Verifying…</Text>
         </View>
       )}
 
       {status === 'invalid' && (
         <View style={styles.center}>
-          <Text style={styles.invalidTitle}>LINK EXPIRED</Text>
+          <Text style={styles.invalidTitle}>NOT SIGNED IN</Text>
           <Text style={styles.invalidText}>
-            This reset link is invalid or expired. Request a new one from the sign-in screen.
+            To reset your password, request a reset email from the sign-in screen and follow the link in the email.
           </Text>
           <TouchableOpacity
             style={styles.primary}

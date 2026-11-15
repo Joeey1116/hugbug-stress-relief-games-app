@@ -6,48 +6,91 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState } from 'react-native';
-import * as Linking from 'expo-linking';
 import { useRouter, useSegments } from 'expo-router';
-import type { Session, User } from '@supabase/supabase-js';
-import { isSupabaseConfigured, supabase } from './supabase';
-import { isPasswordResetPending, markPasswordResetPending } from './passwordReset';
-import { markEmailConfirmedPending, markEmailConfirmationFailed } from './emailConfirmed';
+import {
+  AppleAuthProvider,
+  GoogleAuthProvider,
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  reload,
+  sendEmailVerification,
+  signInWithCredential,
+  signInWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  type User,
+} from '@react-native-firebase/auth';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { firebaseAuth } from './firebase';
+import { isPasswordResetPending, requestPasswordReset } from './passwordReset';
 import { ensureProfile } from './profile';
 
 /**
- * AuthProvider — the ONE owner of session state (build 18).
+ * AuthProvider — the ONE owner of session state, now on Firebase Auth
+ * (Nov 15, 2026: Supabase removed, one Firebase project "BeaTrackFam
+ * Apps" holds all the new apps).
  *
- * Why this exists: through build 17, session state had no owner. The
- * startup gate polled getSession() for ~3.2s and then routed forever;
- * every tab resolved the session independently with its own getSession()
- * call; and the deep-link handlers swallowed every failure while still
- * showing the "email confirmed" welcome. When the confirmation handoff
- * failed (see lib/supabase.ts — the client was silently on the implicit
- * flow), the app presented a signed-in-looking demo state and nothing
- * ever recovered.
- *
- * Now: this provider restores the stored session exactly once at launch
- * (processing a cold-start auth deep link first), keeps state current
- * from the client's single onAuthStateChange subscription, drives
- * start/stopAutoRefresh from AppState (the documented RN wiring), and
+ * Same shape as before: this provider restores the persisted session
+ * exactly once at launch from the native SDK's single
+ * onAuthStateChanged subscription, keeps state current from it, and
  * performs the auth-driven navigation reactions. Screens CONSUME state
- * via useAuth(); the gate waits for status instead of polling.
+ * via useAuth() and call the provider's sign-in/sign-up methods; the
+ * gate waits for status instead of polling.
+ *
+ * Email verification: Firebase signs a user in the moment the account
+ * is created, even before the confirmation link is tapped — so this
+ * provider only reports 'signedIn' for a user whose email is verified
+ * (Google/Apple accounts are verified by definition). An unverified
+ * email user stays signed in to Firebase (so the confirmation email
+ * can be resent) but the app treats them as signed out: no navigation
+ * into the tabs, and the sign-in screen shows the resend option.
+ * Firebase confirmation links open a Firebase-hosted page (no deep
+ * link back into the app), so there is no confirmation deep-link
+ * handling here — after tapping the link the user signs in again and
+ * the fresh sign-in sees the verified email.
  */
 
 export type AuthStatus = 'loading' | 'signedIn' | 'signedOut';
 
+/** Thrown by signInWithEmail when the account exists but the email is
+ * not verified yet. Screens check `err.code === 'auth/email-not-verified'`
+ * and show the resend-confirmation UI instead of a generic error. */
+export const EMAIL_NOT_VERIFIED_CODE = 'auth/email-not-verified';
+
+function emailNotVerifiedError(): Error {
+  const err = new Error('email-not-verified') as Error & { code?: string };
+  err.code = EMAIL_NOT_VERIFIED_CODE;
+  return err;
+}
+
+/** Thrown when the user dismisses the native Google/Apple sheet. Screens
+ * swallow this silently — cancelling is not an error. */
+export const SIGN_IN_CANCELLED_CODE = 'auth/sign-in-cancelled';
+
+function signInCancelledError(): Error {
+  const err = new Error('sign-in-cancelled') as Error & { code?: string };
+  err.code = SIGN_IN_CANCELLED_CODE;
+  return err;
+}
+
 export interface AuthContextValue {
   status: AuthStatus;
-  session: Session | null;
+  session: User | null;
   user: User | null;
   /** Signed-in user's id, or null when signed out. The tabs are
-   * session-guarded (build 20) — a null id never reaches a tab screen. */
+   * session-guarded — a null id never reaches a tab screen. */
   userId: string | null;
   /** Signed-in user's email, or null. */
   email: string | null;
+  /** Firebase is configured via the bundled config files
+   * (google-services.json / GoogleService-Info.plist) — always true. */
   configured: boolean;
   signOut: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<User>;
+  signUpWithEmail: (email: string, password: string) => Promise<User>;
+  signInWithGoogle: () => Promise<User>;
+  signInWithApple: () => Promise<User>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  resendVerificationEmail: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -56,93 +99,30 @@ const AuthContext = createContext<AuthContextValue>({
   user: null,
   userId: null,
   email: null,
-  configured: false,
+  configured: true,
   signOut: async () => {},
+  signInWithEmail: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
+  signUpWithEmail: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
+  signInWithGoogle: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
+  signInWithApple: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
+  sendPasswordReset: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
+  resendVerificationEmail: async () => {
+    throw new Error('AuthProvider not mounted');
+  },
 });
 
 export function useAuth(): AuthContextValue {
   return useContext(AuthContext);
-}
-
-const RESET_URL_PREFIX = 'hugbug://reset-password';
-const CONFIRMED_URL_PREFIX = 'hugbug://confirmed';
-
-/** Pull query + fragment params out of a deep-link URL. */
-function getUrlParams(url: string): Record<string, string> {
-  const params: Record<string, string> = {};
-  const qIndex = url.indexOf('?');
-  const hIndex = url.indexOf('#');
-  const query = qIndex >= 0 ? url.slice(qIndex + 1, hIndex >= 0 ? hIndex : undefined) : '';
-  const fragment = hIndex >= 0 ? url.slice(hIndex + 1) : '';
-  for (const part of `${query}&${fragment}`.split('&')) {
-    const eq = part.indexOf('=');
-    if (eq > 0) {
-      params[decodeURIComponent(part.slice(0, eq))] = decodeURIComponent(part.slice(eq + 1));
-    }
-  }
-  return params;
-}
-
-interface EstablishedSession {
-  userId: string;
-  email: string;
-}
-
-/**
- * Turn deep-link credentials into a real session, or return null.
- * Success is checked on the RESULT — exchangeCodeForSession/setSession
- * report auth failures as a returned error with null data, not a throw,
- * and builds 16/17 treated "no exception" as success.
- */
-async function establishSessionFromParams(
-  params: Record<string, string>,
-): Promise<EstablishedSession | null> {
-  if (!supabase) return null;
-  try {
-    if (params.code) {
-      // PKCE flow: the verifier was stored in AsyncStorage when the email
-      // was requested (signUp / resend / resetPasswordForEmail). The
-      // redirect may carry the flow slot id as sb_flow_id.
-      const { data, error } = await supabase.auth.exchangeCodeForSession(
-        params.code,
-        params.sb_flow_id ? { flowId: params.sb_flow_id } : undefined,
-      );
-      if (!error && data.session && data.user) {
-        return { userId: data.user.id, email: data.user.email ?? '' };
-      }
-      console.warn(
-        '[auth] exchangeCodeForSession did not establish a session:',
-        error?.message ?? 'no session in response',
-      );
-      return null;
-    }
-    if (params.access_token && params.refresh_token) {
-      // Implicit fallback (older emails / links minted before PKCE).
-      const { data, error } = await supabase.auth.setSession({
-        access_token: params.access_token,
-        refresh_token: params.refresh_token,
-      });
-      if (!error && data.session && data.user) {
-        return { userId: data.user.id, email: data.user.email ?? '' };
-      }
-      console.warn(
-        '[auth] setSession did not establish a session:',
-        error?.message ?? 'no session in response',
-      );
-      return null;
-    }
-  } catch (err: any) {
-    console.warn('[auth] deep-link session setup threw:', err?.message ?? String(err));
-    return null;
-  }
-  if (params.error || params.error_code) {
-    console.warn(
-      '[auth] deep link carried an error:',
-      params.error_code ?? params.error,
-      params.error_description ?? '',
-    );
-  }
-  return null;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -151,140 +131,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const segmentsRef = useRef<(string | undefined)[]>(segments as (string | undefined)[]);
   segmentsRef.current = segments as (string | undefined)[];
 
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
-  const configured = isSupabaseConfigured();
 
-  /* ---- deep-link handlers (defined once, used for cold + warm) ---- */
-
-  const handleResetUrl = async (url: string) => {
-    if (!supabase) return;
-    markPasswordResetPending();
-    await establishSessionFromParams(getUrlParams(url));
-    // Warm case the router is ready and we can go straight there; on
-    // cold start this may no-op and the gate routes via the flag.
-    try {
-      router.push('/reset-password');
-    } catch {
-      // Router not ready yet (cold start) — the gate routes via the flag.
-    }
-  };
-
-  const handleConfirmedUrl = async (url: string, warm: boolean) => {
-    if (!supabase) return;
-    const established = await establishSessionFromParams(getUrlParams(url));
-    if (!established) {
-      // The link did NOT create a session. Do not fake success: no
-      // welcome flag, no trip into the tabs. The account itself is
-      // usually confirmed server-side by now, so sign-in is the right
-      // next step (the gate does this on cold start via the flag).
-      markEmailConfirmationFailed();
-      if (warm) {
-        try {
-          router.replace('/sign-in');
-        } catch {
-          // Router not ready — the signed-out state speaks for itself.
-        }
-      }
-      return;
-    }
-    try {
-      await ensureProfile(established.userId, established.email);
-    } catch {
-      // Non-fatal: profile self-heals on the next ensureProfile call.
-    }
-    // Only NOW is the welcome message honest.
-    markEmailConfirmedPending();
-    if (warm) {
-      try {
-        router.replace('/(tabs)');
-      } catch {
-        // The provider's signed-in reaction routes instead.
-      }
-    }
-  };
-
-  const handleDeepLink = async (url: string, warm: boolean) => {
-    if (url.startsWith(RESET_URL_PREFIX)) {
-      await handleResetUrl(url);
-    } else if (url.startsWith(CONFIRMED_URL_PREFIX)) {
-      await handleConfirmedUrl(url, warm);
-    }
-  };
-
-  /* ---- the single restore + subscription + upkeep effect ---- */
+  /* ---- the single restore + subscription effect ---- */
 
   useEffect(() => {
-    if (!configured || !supabase) {
-      setStatus('signedOut');
-      return;
-    }
-
-    // Auto-refresh upkeep: supabase-js refreshes tokens on a JS timer
-    // that iOS suspends while the app is backgrounded; the documented
-    // React Native wiring drives start/stop from AppState.
-    if (AppState.currentState === 'active') {
-      supabase.auth.startAutoRefresh();
-    }
-    const appStateSub = AppState.addEventListener('change', (state) => {
-      if (!supabase) return;
-      if (state === 'active') {
-        supabase.auth.startAutoRefresh();
-      } else {
-        supabase.auth.stopAutoRefresh();
-      }
-    });
-
     // The one subscription. Every auth change flows through here into
     // context state; screens never resolve the session on their own.
-    const { data: authSub } = supabase.auth.onAuthStateChange((event, newSession) => {
-      setSession(newSession);
-      setStatus(newSession ? 'signedIn' : 'signedOut');
-      if (event === 'PASSWORD_RECOVERY') {
+    // A persisted session restores here on launch — no polling, no
+    // manual token upkeep (the native SDK refreshes tokens itself).
+    const unsubscribe = onAuthStateChanged(firebaseAuth, (fbUser) => {
+      void (async () => {
+        if (!fbUser) {
+          setUser(null);
+          setStatus('signedOut');
+          return;
+        }
         try {
-          router.push('/reset-password');
+          // Fresh claims: a user who tapped the confirmation link while
+          // the app was closed must come back verified.
+          await reload(fbUser);
         } catch {
-          // Cold start — the gate routes via the reset flag.
+          // Reload failed (offline, user deleted) — use cached claims.
         }
-      }
-    });
-
-    // Cold-start deep link first (so a confirmation/recovery exchange is
-    // part of the restore, not a race against it), then ONE restore read.
-    let cancelled = false;
-    (async () => {
-      try {
-        const initialUrl = await Linking.getInitialURL();
-        if (initialUrl && !cancelled) {
-          await handleDeepLink(initialUrl, false);
+        setUser(fbUser);
+        if (fbUser.emailVerified) {
+          setStatus('signedIn');
+          try {
+            await ensureProfile(fbUser.uid, fbUser.email ?? '');
+          } catch {
+            // Non-fatal: profile self-heals on the next ensureProfile call.
+          }
+        } else {
+          // Unverified email: stay out of the tabs (see header comment).
+          setStatus('signedOut');
         }
-      } catch {
-        // No initial URL — a normal launch.
-      }
-      if (cancelled) return;
-      try {
-        const { data } = await supabase.auth.getSession();
-        if (cancelled) return;
-        setSession(data.session);
-        setStatus(data.session ? 'signedIn' : 'signedOut');
-      } catch {
-        if (!cancelled) setStatus('signedOut');
-      }
-    })();
-
-    // Warm deep links: app already running when the link is tapped.
-    const linkSub = Linking.addEventListener('url', ({ url }) => {
-      void handleDeepLink(url, true);
+      })();
     });
 
     return () => {
-      cancelled = true;
-      appStateSub.remove();
-      authSub.subscription.unsubscribe();
-      linkSub.remove();
+      unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configured]);
+  }, []);
 
   /* ---- navigation reactions: act on auth TRANSITIONS only ---- */
 
@@ -316,22 +205,140 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [status, router]);
 
-  const signOut = async () => {
-    if (supabase) {
-      await supabase.auth.signOut().catch(() => {});
+  /* ---- auth actions (used by the sign-in / sign-up screens) ---- */
+
+  const signInWithEmail = async (email: string, password: string): Promise<User> => {
+    const cred = await signInWithEmailAndPassword(firebaseAuth, email, password);
+    try {
+      await reload(cred.user);
+    } catch {
+      // Use the claims from the fresh sign-in.
     }
-    setSession(null);
+    if (!cred.user.emailVerified) {
+      // Stay signed in to Firebase so the confirmation email can be
+      // resent, but do not let the app treat this as signed in.
+      throw emailNotVerifiedError();
+    }
+    return cred.user;
+  };
+
+  const signUpWithEmail = async (email: string, password: string): Promise<User> => {
+    const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+    try {
+      await sendEmailVerification(cred.user);
+    } catch {
+      // The account exists; the confirmation email can be resent from
+      // the sign-in screen. Do not fail sign-up over it.
+    }
+    try {
+      await ensureProfile(cred.user.uid, email);
+    } catch {
+      // Non-fatal.
+    }
+    // emailVerified is false for a fresh email/password account — the
+    // listener keeps status at 'signedOut' and the screen shows the
+    // "check your email" flow instead of routing into the tabs.
+    return cred.user;
+  };
+
+  const signInWithGoogle = async (): Promise<User> => {
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    } catch {
+      // iOS has no Play Services; hasPlayServices is an Android check.
+    }
+    let idToken: string | null = null;
+    try {
+      const response = await GoogleSignin.signIn();
+      if (response.type === 'cancelled') {
+        throw signInCancelledError();
+      }
+      idToken = response.data?.idToken ?? null;
+    } catch (err: any) {
+      if (err?.code === SIGN_IN_CANCELLED_CODE) throw err;
+      // The native SDK reports cancellation as an error on some
+      // versions — treat it as a cancel, not a failure.
+      const message = String(err?.message ?? err ?? '').toLowerCase();
+      if (message.includes('cancel')) {
+        throw signInCancelledError();
+      }
+      throw err;
+    }
+    if (!idToken) {
+      // Fallback: tokens may be available without a fresh prompt.
+      try {
+        const tokens = await GoogleSignin.getTokens();
+        idToken = tokens?.idToken ?? null;
+      } catch {
+        // Fall through to the error below.
+      }
+    }
+    if (!idToken) {
+      throw new Error('Google did not return a sign-in token. Try again.');
+    }
+    const credential = GoogleAuthProvider.credential(idToken);
+    const cred = await signInWithCredential(firebaseAuth, credential);
+    return cred.user;
+  };
+
+  const signInWithApple = async (): Promise<User> => {
+    const AppleAuthentication = await import('expo-apple-authentication');
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [AppleAuthentication.AppleAuthenticationScope.EMAIL],
+    });
+    if (!credential.identityToken) {
+      throw new Error('Apple did not return a sign-in token. Try again.');
+    }
+    const appleCredential = AppleAuthProvider.credential(credential.identityToken);
+    const cred = await signInWithCredential(firebaseAuth, appleCredential);
+    try {
+      // Apple only shares the email on the FIRST sign-in; prefer it for
+      // the profile, fall back to whatever Firebase has.
+      await ensureProfile(cred.user.uid, credential.email ?? cred.user.email ?? '');
+    } catch {
+      // Non-fatal.
+    }
+    return cred.user;
+  };
+
+  const sendPasswordReset = async (email: string): Promise<void> => {
+    await requestPasswordReset(email);
+  };
+
+  const resendVerificationEmail = async (): Promise<void> => {
+    const current = firebaseAuth.currentUser;
+    if (!current) {
+      throw new Error('Sign in first, then resend the confirmation email.');
+    }
+    await sendEmailVerification(current);
+  };
+
+  const signOut = async () => {
+    try {
+      await GoogleSignin.signOut();
+    } catch {
+      // Best-effort: clears the cached Google account so the next
+      // Google sign-in prompts for an account choice.
+    }
+    await firebaseSignOut(firebaseAuth).catch(() => {});
+    setUser(null);
     setStatus('signedOut');
   };
 
   const value: AuthContextValue = {
     status,
-    session,
-    user: session?.user ?? null,
-    userId: session?.user?.id ?? null,
-    email: session?.user?.email ?? null,
-    configured,
+    session: user,
+    user,
+    userId: user?.uid ?? null,
+    email: user?.email ?? null,
+    configured: true,
     signOut,
+    signInWithEmail,
+    signUpWithEmail,
+    signInWithGoogle,
+    signInWithApple,
+    sendPasswordReset,
+    resendVerificationEmail,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -63,8 +63,8 @@ const POLICY: Block[] = [
   },
   {
     kind: 'bullet',
-    lead: 'Supabase',
-    text: '— our database and authentication provider, which stores your account and game progress securely.',
+    lead: 'Firebase',
+    text: '— our database and authentication provider (Google Firebase), which stores your account and game progress securely.',
   },
   {
     kind: 'bullet',

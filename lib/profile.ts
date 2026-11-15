@@ -1,19 +1,20 @@
-import { supabase } from './supabase';
+import { doc, serverTimestamp, setDoc } from '@react-native-firebase/firestore';
+import { db } from './firebase';
 
 /**
- * Hugbug profile — one row per account in the `profiles` table
- * (id uuid PK, email text). Best-effort: when Supabase is not configured
- * (placeholder values in eas.json) this is a no-op and the app still works
+ * Hugbug profile — one document per account in the `profiles`
+ * collection (doc id = uid, fields email + updatedAt). Best-effort:
+ * when Firestore isn't reachable (or the database hasn't been created
+ * yet in the Firebase console) this is a no-op and the app still works
  * fully offline with local progress.
- *
- * TODO (Joey step): create a dedicated Supabase project for Hugbug and run
- * the SQL in supabase/schema.sql, then put the real URL + anon key in
- * eas.json. Never reuse the Rewards project's credentials.
  */
 export async function ensureProfile(userId: string, email: string): Promise<void> {
-  if (!supabase) return;
   try {
-    await supabase.from('profiles').upsert({ id: userId, email }, { onConflict: 'id' });
+    await setDoc(
+      doc(db, 'profiles', userId),
+      { email, updatedAt: serverTimestamp() },
+      { merge: true },
+    );
   } catch {
     // Non-fatal: the profile self-heals on the next call.
   }

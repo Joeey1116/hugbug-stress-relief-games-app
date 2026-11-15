@@ -3,8 +3,7 @@ import { ActivityIndicator, Platform, StyleSheet, Text, TextInput, TouchableOpac
 import { router } from 'expo-router';
 import { Screen } from '../components/Screen';
 import { HugbugMark } from '../components/HugbugMark';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
-import { ensureProfile } from '../lib/profile';
+import { EMAIL_NOT_VERIFIED_CODE, SIGN_IN_CANCELLED_CODE, useAuth } from '../lib/auth';
 
 export default function SignIn() {
   const [email, setEmail] = useState('');
@@ -13,13 +12,15 @@ export default function SignIn() {
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const [resending, setResending] = useState(false);
   const [forgotSending, setForgotSending] = useState(false);
   const [cooldownSecs, setCooldownSecs] = useState(0);
   const [showResend, setShowResend] = useState(false);
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const configured = isSupabaseConfigured();
+  const { signInWithEmail, signInWithGoogle, signInWithApple, sendPasswordReset, resendVerificationEmail } =
+    useAuth();
 
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
@@ -56,19 +57,11 @@ export default function SignIn() {
     setResending(true);
     setError('');
     try {
-      const { error: resendError } = await supabase!.auth.resend({
-        type: 'signup',
-        email: target,
-        options: { emailRedirectTo: 'hugbug://confirmed' },
-      });
-      if (resendError) {
-        setError(resendError.message);
-        return;
-      }
-      setInfo(`Confirmation email resent to ${target} — tap the link in the email and you'll come right back into the app. Check your inbox and spam folder.`);
+      await resendVerificationEmail();
+      setInfo(`Confirmation email resent to ${target} — tap the link in the email to confirm, then sign in again here. Check your inbox and spam folder.`);
       startCooldown();
-    } catch {
-      setError('Could not resend the email. Check your connection and try again.');
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not resend the email. Check your connection and try again.');
     } finally {
       setResending(false);
     }
@@ -85,16 +78,10 @@ export default function SignIn() {
     }
     setForgotSending(true);
     try {
-      const { error: resetError } = await supabase!.auth.resetPasswordForEmail(target, {
-        redirectTo: 'hugbug://reset-password',
-      });
-      if (resetError) {
-        setError(resetError.message);
-        return;
-      }
-      setInfo(`Password reset email sent to ${target} — check your inbox and spam folder.`);
-    } catch {
-      setError('Could not send the reset email. Check your connection and try again.');
+      await sendPasswordReset(target);
+      setInfo(`Password reset email sent to ${target} — tap the link in the email to choose a new password, then sign in here. Check your inbox and spam folder.`);
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not send the reset email. Check your connection and try again.');
     } finally {
       setForgotSending(false);
     }
@@ -110,67 +97,52 @@ export default function SignIn() {
     }
     setLoading(true);
     try {
-      const { data, error: signInError } = await supabase!.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (signInError) {
-        if (signInError.message.toLowerCase().includes('email not confirmed')) {
-          setInfo(
-            `Your email isn\u2019t confirmed yet. We sent the link to ${email.trim()} — tap it in your email and you'll come right back into the app. Check your inbox and spam folder, or resend it below.`,
-          );
-          setShowResend(true);
-        } else {
-          setError(signInError.message);
-        }
+      await signInWithEmail(email.trim(), password);
+      // Signed in and verified — the auth provider routes into the tabs.
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      if (err?.code === EMAIL_NOT_VERIFIED_CODE) {
+        setInfo(
+          `Your email isn\u2019t confirmed yet. We sent the link to ${email.trim()} — tap it in your email to confirm, then sign in again here. Check your inbox and spam folder, or resend it below.`,
+        );
+        setShowResend(true);
       } else {
-        try {
-          if (data.user) await ensureProfile(data.user.id, email.trim());
-        } catch {
-          // Non-fatal.
-        }
-        router.replace('/(tabs)');
+        setError(err?.message ?? 'Could not sign you in. Check your connection and try again.');
       }
-    } catch {
-      setError('Could not sign you in. Check your connection and try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  /** Sign in with Apple (iOS only) — nonce-bound id_token into Supabase. */
+  /** Sign in with Apple (iOS only) — native sheet, straight to Firebase. */
   const handleAppleSignIn = async () => {
     setError('');
     setAppleLoading(true);
     try {
-      const AppleAuthentication = await import('expo-apple-authentication');
-      const credential = await AppleAuthentication.signInAsync({
-        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.EMAIL],
-      });
-      if (!credential.identityToken) {
-        setError('Apple did not return a sign-in token. Try again.');
-        return;
-      }
-      const { data, error: appleError } = await supabase!.auth.signInWithIdToken({
-        provider: 'apple',
-        token: credential.identityToken,
-      });
-      if (appleError) {
-        setError(appleError.message);
-        return;
-      }
-      try {
-        if (data.user) await ensureProfile(data.user.id, data.user.email ?? '');
-      } catch {
-        // Non-fatal.
-      }
+      await signInWithApple();
       router.replace('/(tabs)');
     } catch (err: any) {
-      if (err?.code !== 'ERR_REQUEST_CANCELED') {
-        setError('Apple sign-in did not complete. Try again, or sign in with email.');
+      if (err?.code !== SIGN_IN_CANCELLED_CODE && err?.code !== 'ERR_REQUEST_CANCELED') {
+        setError(err?.message ?? 'Apple sign-in did not complete. Try again, or sign in with email.');
       }
     } finally {
       setAppleLoading(false);
+    }
+  };
+
+  /** Sign in with Google — native account sheet, straight to Firebase. */
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      await signInWithGoogle();
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      if (err?.code !== SIGN_IN_CANCELLED_CODE) {
+        setError(err?.message ?? 'Google sign-in did not complete. Try again, or sign in with email.');
+      }
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -184,14 +156,23 @@ export default function SignIn() {
 
       {appleAvailable && (
         <TouchableOpacity
-          style={[styles.appleBtn, (!configured || appleLoading) && styles.primaryDisabled]}
+          style={[styles.appleBtn, appleLoading && styles.primaryDisabled]}
           onPress={handleAppleSignIn}
-          disabled={!configured || appleLoading}
+          disabled={appleLoading}
           activeOpacity={0.8}
         >
           {appleLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.appleText}>  Continue with Apple</Text>}
         </TouchableOpacity>
       )}
+
+      <TouchableOpacity
+        style={[styles.googleBtn, googleLoading && styles.primaryDisabled]}
+        onPress={handleGoogleSignIn}
+        disabled={googleLoading}
+        activeOpacity={0.8}
+      >
+        {googleLoading ? <ActivityIndicator color="#000" /> : <Text style={styles.googleText}>G  Continue with Google</Text>}
+      </TouchableOpacity>
 
       <Text style={styles.label}>EMAIL</Text>
       <TextInput
@@ -203,7 +184,6 @@ export default function SignIn() {
         keyboardType="email-address"
         autoCapitalize="none"
         autoCorrect={false}
-        editable={configured}
       />
       <Text style={styles.label}>PASSWORD</Text>
       <TextInput
@@ -213,10 +193,9 @@ export default function SignIn() {
         placeholder="Your password"
         placeholderTextColor="#555555"
         secureTextEntry
-        editable={configured}
       />
 
-      <TouchableOpacity onPress={handleForgotPassword} disabled={!configured || forgotSending} style={styles.forgot} activeOpacity={0.8}>
+      <TouchableOpacity onPress={handleForgotPassword} disabled={forgotSending} style={styles.forgot} activeOpacity={0.8}>
         {forgotSending ? <ActivityIndicator color="#aaaaaa" size="small" /> : <Text style={styles.forgotText}>Forgot password?</Text>}
       </TouchableOpacity>
 
@@ -239,9 +218,9 @@ export default function SignIn() {
       )}
 
       <TouchableOpacity
-        style={[styles.primary, (!configured || loading) && styles.primaryDisabled]}
+        style={[styles.primary, loading && styles.primaryDisabled]}
         onPress={handleSignIn}
-        disabled={!configured || loading}
+        disabled={loading}
         activeOpacity={0.8}
       >
         {loading ? <ActivityIndicator color="#000" /> : <Text style={styles.primaryText}>SIGN IN</Text>}
@@ -250,13 +229,6 @@ export default function SignIn() {
       <TouchableOpacity onPress={() => router.replace('/sign-up')} style={styles.switch}>
         <Text style={styles.switchText}>New here? Create an account</Text>
       </TouchableOpacity>
-
-      {!configured && (
-        <Text style={styles.demoNote}>
-          Sign-in is waiting on the Hugbug Supabase project — see BUILD-NOTES.md. The app still opens in demo mode
-          once an account exists.
-        </Text>
-      )}
     </Screen>
   );
 }
@@ -292,11 +264,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   appleText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  googleBtn: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  googleText: { color: '#000000', fontSize: 16, fontWeight: '700' },
   resend: { borderWidth: 1, borderColor: '#3a3a3a', borderRadius: 16, paddingVertical: 15, alignItems: 'center', marginTop: 12 },
   resendText: { color: '#ffffff', fontSize: 14, fontWeight: '800', letterSpacing: 2 },
   switch: { alignItems: 'center', marginTop: 18 },
   switchText: { color: '#aaaaaa', fontSize: 14, fontWeight: '600' },
   forgot: { alignItems: 'flex-end', marginTop: 2, marginBottom: 4, paddingVertical: 4 },
   forgotText: { color: '#aaaaaa', fontSize: 14, fontWeight: '600' },
-  demoNote: { color: '#666666', fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 24 },
 });

@@ -7,7 +7,7 @@ One app, a library of mini-games, mood-matched. No timers, no losing, no ads.
 - **Version:** 1.0.0 (iOS build 1000 / Android versionCode 1000)
 - **Bundle ID (PROVISIONAL — Joey must confirm before any store upload; bundle IDs can't change after first upload):** `com.beatrackfaminc.hugbug`
 - **Scheme:** `hugbug`
-- **Stack:** Expo SDK ~57.0.26, expo-router ~57.0.24, React Native 0.86.3, Supabase Auth (PKCE), native Liquid Glass tabs (expo-router `unstable-native-tabs`)
+- **Stack:** Expo SDK ~57.0.26, expo-router ~57.0.24, React Native 0.86.3, Firebase Auth + Firestore, native Liquid Glass tabs (expo-router `unstable-native-tabs`)
 
 ## The library (v1 — 10 games + breathing anchor)
 
@@ -34,14 +34,13 @@ Adding a game = one module in `lib/games/` + one entry in `lib/games/registry.ts
 - Animations use React Native's built-in `Animated` API — no Reanimated, no Skia in v1. Calm games don't need a 60fps canvas loop; if a future game genuinely needs one, Skia gets added then.
 - Sounds are soft synthesized chimes in `assets/sounds/` (expo-audio), with a mute toggle in You → Settings.
 - Haptics via `expo-haptics` on key moments.
-- Progress is tied to the account (Supabase `game_progress`, cached in AsyncStorage for offline). When Supabase isn't configured, the app still works fully offline.
-- Auth: email + Apple Sign In (expo-apple-authentication → Supabase `signInWithIdToken`), PKCE email confirmation, consent-first onboarding, App Tracking Transparency prompt.
+- Progress is tied to the account (Firestore `game_progress`, one doc per user, cached in AsyncStorage for offline). When Firestore isn't reachable, the app still works fully offline.
+- Auth: email + Apple Sign In + Google Sign In (native sheets → Firebase credentials), email confirmation, consent-first onboarding, App Tracking Transparency prompt.
 
 ## Setup (Joey steps — see BUILD-NOTES.md for the full list)
 
-1. Create a **dedicated Supabase project** for Hugbug, run `supabase/schema.sql`, allowlist `hugbug://confirmed` and `hugbug://reset-password`, enable the Apple provider.
-2. Put the real URL + anon key in `eas.json` (placeholders there now).
-3. Confirm the bundle ID, create the App Store Connect app record + API key + distribution cert + provisioning profile, and the Play app record + keystore + service account.
+1. Create the **Firestore database** in the Firebase console ("BeaTrackFam Apps" project → Firestore Database → Create database, production mode) so profile/progress sync works.
+2. Confirm the bundle ID, create the App Store Connect app record + API key + distribution cert + provisioning profile, and the Play app record + keystore + service account.
 4. Add the deploy key: repo Settings → Deploy keys → paste `~/.ssh/id_ed25519_hugbug.pub` (if not already added).
 5. Confirm the v1 game set + all titles, and get a trademark-professional review of the "Hugbug" name before filing (live US HUGBUG registrations exist in baby/toy classes).
 

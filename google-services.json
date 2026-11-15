@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "540704006558",
+    "project_id": "beatrackfam-apps",
+    "storage_bucket": "beatrackfam-apps.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:540704006558:android:f75317ed18430dbbcbb68f",
+        "android_client_info": {
+          "package_name": "com.beatrackfaminc.hugbug"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "540704006558-efnranrjakji3clmn7bmuj74bdt5hmph.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCWMccVA_uWNgJ-f6_9D3e35pRZ-GbHVJ0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "540704006558-efnranrjakji3clmn7bmuj74bdt5hmph.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
