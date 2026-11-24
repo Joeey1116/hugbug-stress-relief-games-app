@@ -70,6 +70,7 @@
           }
         }
       ],
+      "./plugins/with-kotlin-gradle-plugin-version",
       [
         "expo-tracking-transparency",
         {
