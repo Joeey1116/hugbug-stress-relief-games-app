@@ -10,7 +10,7 @@
       ],
       "package": "com.beatrackfaminc.hugbug",
       "permissions": [],
-      "versionCode": 1001,
+      "versionCode": 1002,
       "googleServicesFile": "./google-services.json"
     },
     "extra": {
@@ -20,7 +20,7 @@
     },
     "icon": "./assets/icon.png",
     "ios": {
-      "buildNumber": "1001",
+      "buildNumber": "1002",
       "bundleIdentifier": "com.beatrackfaminc.hugbug",
       "deploymentTarget": "16.4",
       "entitlements": {
