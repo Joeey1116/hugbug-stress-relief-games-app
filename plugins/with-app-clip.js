@@ -352,7 +352,7 @@ const CLIP_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 \t<true/>
 \t<key>com.apple.developer.parent-application-identifiers</key>
 \t<array>
-\t\t<string>${MAIN_BUNDLE_ID}</string>
+\t\t<string>$(AppIdentifierPrefix)${MAIN_BUNDLE_ID}</string>
 \t</array>
 \t<key>com.apple.developer.associated-domains</key>
 \t<array>
