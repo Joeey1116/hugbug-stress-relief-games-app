@@ -454,26 +454,30 @@ function withAppClip(config) {
     clipTarget.productName = CLIP_TARGET_NAME;
     project.pbxNativeTargetSection()[`${clipUuid}_comment`] = CLIP_TARGET_NAME;
 
-    // Product file: HugbugClip.app -> HugbugClip.appclip.
+    // Product file: leave it as HugbugClip.app (wrapper.application).
+    // Do NOT rename it to HugbugClip.appclip: the clip target builds
+    // HugbugClip.app on disk, so an embed phase referencing
+    // HugbugClip.appclip looks for a file that never exists and Xcode
+    // silently copies nothing into AppClips (run 45366451274 — clip built,
+    // never embedded). Xcode renames the .app to .appclip itself when the
+    // Embed App Clips phase copies it. Motivation's working plugin does
+    // exactly this: product stays .app, embed references the .app.
     const productRefUuid = clipTarget.productReference;
     const fileRefs = project.pbxFileReferenceSection();
-    fileRefs[productRefUuid].explicitFileType = 'wrapper.app-clip';
-    fileRefs[productRefUuid].path = `${CLIP_TARGET_NAME}.appclip`;
-    fileRefs[productRefUuid].name = `${CLIP_TARGET_NAME}.appclip`;
-    fileRefs[`${productRefUuid}_comment`] = `${CLIP_TARGET_NAME}.appclip`;
+    fileRefs[`${productRefUuid}_comment`] = `${CLIP_TARGET_NAME}.app`;
     const productsGroup = project.pbxGroupByName('Products');
     if (productsGroup) {
       for (const child of productsGroup.children) {
-        if (child.value === productRefUuid) child.comment = `${CLIP_TARGET_NAME}.appclip`;
+        if (child.value === productRefUuid) child.comment = `${CLIP_TARGET_NAME}.app`;
       }
     }
     const buildFiles = project.pbxBuildFileSection();
     for (const key of Object.keys(buildFiles)) {
       if (key.endsWith('_comment')) continue;
       if (buildFiles[key].fileRef === productRefUuid) {
-        buildFiles[key].fileRef_comment = `${CLIP_TARGET_NAME}.appclip`;
+        buildFiles[key].fileRef_comment = `${CLIP_TARGET_NAME}.app`;
         // The writer prints the section comment key, not fileRef_comment.
-        buildFiles[`${key}_comment`] = `${CLIP_TARGET_NAME}.appclip in Embed App Clips`;
+        buildFiles[`${key}_comment`] = `${CLIP_TARGET_NAME}.app in Embed App Clips`;
       }
     }
 
@@ -537,7 +541,7 @@ function withAppClip(config) {
     // $(CONTENTS_FOLDER_PATH)/AppClips destination is the form that
     // actually runs.
     const embed = project.addBuildPhase(
-      [`${CLIP_TARGET_NAME}.appclip`],
+      [`${CLIP_TARGET_NAME}.app`],
       'PBXCopyFilesBuildPhase',
       'Embed App Clips',
       mainTargetUuid,
@@ -549,7 +553,7 @@ function withAppClip(config) {
     // file's group ("Copy Files"); correct it to the phase name.
     for (const f of embed.buildPhase.files) {
       if (f.value && buildFiles[f.value]) {
-        f.comment = `${CLIP_TARGET_NAME}.appclip in Embed App Clips`;
+        f.comment = `${CLIP_TARGET_NAME}.app in Embed App Clips`;
       }
     }
 
