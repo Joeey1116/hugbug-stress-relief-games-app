@@ -49,8 +49,8 @@
  *      PROVISIONING_PROFILE_SPECIFIER on the xcodebuild command line,
  *      which overrides EVERY target — the clip would then try to sign
  *      with the main app's profile and fail):
- *        main target -> "HugBug App"       (same profile as before)
- *        clip target -> "HugBug App Clip"  (Joey creates this in the
+ *        main target -> "HugBug - Stress Relief Games"       (same profile as before)
+ *        clip target -> "HugBug - Stress Relief Games App Clip"  (Joey creates this in the
  *                                           Developer portal; the
  *                                           workflow's
  *                                           -allowProvisioningUpdates
@@ -80,10 +80,10 @@
  *
  * PORTAL PREREQUISITES (Joey, before the first clip build):
  *   - Developer portal: App ID com.beatrackfaminc.hugbug.HugBug
- *     ("HugBug App Clip") — ALREADY EXISTS (verified from Joey's
+ *     ("HugBug - Stress Relief Games App Clip") — ALREADY EXISTS (verified from Joey's
  *     portal screenshots, Nov 10).
  *   - Developer portal: Distribution provisioning profile named
- *     exactly "HugBug App Clip" for that App ID, including the
+ *     exactly "HugBug - Stress Relief Games App Clip" for that App ID, including the
  *     current Apple Distribution certificate (the Nov 6 one).
  *     STATUS UNCONFIRMED — Joey is checking the Profiles tab; if
  *     no such profile exists yet, create it with exactly that name
@@ -99,8 +99,8 @@ const path = require('path');
 const CLIP_TARGET_NAME = 'HugbugClip';
 const CLIP_BUNDLE_ID = 'com.beatrackfaminc.hugbug.HugBug';
 const MAIN_BUNDLE_ID = 'com.beatrackfaminc.hugbug';
-const MAIN_PROFILE = 'HugBug App';
-const CLIP_PROFILE = 'HugBug App Clip';
+const MAIN_PROFILE = 'HugBug - Stress Relief Games';
+const CLIP_PROFILE = 'HugBug - Stress Relief Games App Clip';
 const CLIP_PRODUCT_TYPE = 'com.apple.product-type.application.on-demand-install-capable';
 
 const CLIP_APP_SWIFT = `import SwiftUI

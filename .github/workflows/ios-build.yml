@@ -11,9 +11,9 @@ name: Build iOS IPA (Hugbug)
 #      these four repo secrets (Settings, Secrets and variables, Actions):
 #        ASC_API_KEY_ID, ASC_API_KEY_P8, ASC_API_ISSUER_ID, APPLE_TEAM_ID
 #   3. APP CLIP (bundle ID com.beatrackfaminc.hugbug.HugBug, App ID name
-#      "HugBug App Clip" — the App ID ALREADY EXISTS in the portal):
+#      "HugBug - Stress Relief Games App Clip" — the App ID ALREADY EXISTS in the portal):
 #      the archive + export steps below reference a Distribution
-#      provisioning profile named exactly "HugBug App Clip" for that
+#      provisioning profile named exactly "HugBug - Stress Relief Games App Clip" for that
 #      App ID, including the current Apple Distribution certificate
 #      (the Nov 6 one). STATUS UNCONFIRMED — Joey is checking the
 #      Profiles tab. If no such profile exists, create it with exactly
@@ -159,8 +159,8 @@ jobs:
         # the whole job timeout in macOS minutes.
         #
         # NOTE (App Clip): the provisioning profiles are per-target in the
-        # project now (plugins/with-app-clip.js sets "HugBug App" on the
-        # main target and "HugBug App Clip" on the clip target). Do NOT
+        # project now (plugins/with-app-clip.js sets "HugBug - Stress Relief Games" on the
+        # main target and "HugBug - Stress Relief Games App Clip" on the clip target). Do NOT
         # pass PROVISIONING_PROFILE_SPECIFIER here — a command-line value
         # overrides EVERY target and the clip would try to sign with the
         # main app's profile. CODE_SIGN_IDENTITY / DEVELOPMENT_TEAM are
@@ -231,9 +231,9 @@ jobs:
             <key>provisioningProfiles</key>
             <dict>
               <key>com.beatrackfaminc.hugbug</key>
-              <string>HugBug App</string>
+              <string>HugBug - Stress Relief Games</string>
               <key>com.beatrackfaminc.hugbug.HugBug</key>
-              <string>HugBug App Clip</string>
+              <string>HugBug - Stress Relief Games App Clip</string>
             </dict>
           </dict>
           </plist>
