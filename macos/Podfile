@@ -32,6 +32,31 @@ prepare_react_native_project!
 
 target 'hugbug-games-macOS' do
   platform :macos, '14.0'
+
+  # Dynamic frameworks — REQUIRED by react-native-firebase on this
+  # target. RNFBApp / RNFBAuth / RNFBCrashlytics resolve
+  # firebase-ios-sdk through React Native's SPM integration
+  # (spm_dependency); firebase-ios-sdk's Swift Package products are
+  # automatic libraries, so under static pod linkage every RNFB pod
+  # embeds its own copy of Firebase and they collide at link time as
+  # duplicate symbols. RNFB therefore validates linkage in its
+  # post_install hook (firebase_spm.rb,
+  # rnfirebase_fail_if_spm_static_linkage!) and aborts `pod install`
+  # with "[react-native-firebase] SPM + static linkage is not
+  # supported" — exactly what macOS run #2 (head da23933, the first
+  # run past the worklets fix) hit after "Generating Pods project":
+  # this hand-maintained Podfile had no use_frameworks! at all, so
+  # CocoaPods defaulted the target to static libraries. The durable
+  # fix is the one RNFB's own error prescribes, below. It matches the
+  # iOS install, which has been dynamic all along via
+  # expo-build-properties' ios.useFrameworks: "dynamic" (app.json) ->
+  # ios/Podfile.properties.json -> the generated ios/Podfile; this
+  # Podfile is committed and hand-maintained (Expo prebuild never
+  # regenerates the macos/ folder), so the line lives here directly.
+  # Scoped to this target in this Podfile only — ios/Podfile and its
+  # properties file are generated separately and are untouched.
+  use_frameworks! :linkage => :dynamic
+
   # Expo modules MUST be wired with use_expo_modules! (Microsoft's
   # react-native-macos "Install Expo modules" guide; same pattern as
   # ios/Podfile). This rollout originally omitted it, assuming the
