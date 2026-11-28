@@ -97,6 +97,7 @@
         }
       ],
       "./plugins/with-tvos-signing",
+      "./plugins/with-tvos-pod-gating",
       "expo-asset",
       "@react-native-firebase/app",
       "@react-native-firebase/auth",

@@ -18,6 +18,19 @@ name: Build tvOS (HugBug)
 #     app.json therefore carries the plugin with "isTV": false, so every
 #     normal iOS prebuild is untouched; ONLY this workflow sets EXPO_TV=1.
 #
+# PODS WITHOUT tvOS (Nov 28, 2026): @react-native-google-signin/
+# google-signin's podspec (RNGoogleSignin) declares ONLY ios, so it is
+# gated out of the tvOS install — plugins/with-tvos-pod-gating.js
+# stamps HUGBUG_TVOS_POD_INSTALL=1 into the generated Podfile,
+# react-native.config.js then nulls its ios platform config (the same
+# mechanism as the macOS screens gate), this workflow exports EXPO_TV=1
+# on the pod-install/archive steps as a second signal, and
+# metro.config.js resolves its JS (and expo-apple-authentication's —
+# an ios-only Expo podspec that Expo autolinking filters out of the
+# tvOS install on its own) to src/tvos-stubs/. All other pods declare
+# tvOS (Firebase app/auth/firestore included — email auth works
+# natively on TV; only Google/Apple sign-in are stubbed out).
+#
 # APP CLIP: App Clips are iOS-only. plugins/with-app-clip.js is a complete
 # no-op when EXPO_TV=1, so the converted tvOS project has NO clip target
 # (verified locally Nov 27, 2026: zero HugbugClip references in the
@@ -138,11 +151,22 @@ jobs:
             exit 1
           fi
           grep -q 'PROVISIONING_PROFILE_SPECIFIER = "HugBug - Stress Relief Games"' ios/HugbugStressReliefGames.xcodeproj/project.pbxproj
-          echo "Generated project verified: tvOS SDKROOT, tvos Podfile, no clip target, in-project Release profile."
+          grep -q 'HUGBUG_TVOS_POD_INSTALL' ios/Podfile
+          echo "Generated project verified: tvOS SDKROOT, tvos Podfile, no clip target, in-project Release profile, tvOS pod-gating flag stamped."
 
       - name: Install CocoaPods (tvOS target)
+        # EXPO_TV=1 here (and the HUGBUG_TVOS_POD_INSTALL flag
+        # plugins/with-tvos-pod-gating.js stamped into this Podfile at
+        # prebuild) makes react-native.config.js exclude
+        # @react-native-google-signin/google-signin from
+        # autolinking/codegen: its podspec declares only ios, so an
+        # ungated install fails on it. Its JS side (and
+        # expo-apple-authentication's) is stubbed for tvOS bundles in
+        # metro.config.js (src/tvos-stubs/).
         working-directory: ios
         run: pod install
+        env:
+          EXPO_TV: '1'
 
       - name: Write the App Store Connect API key
         env:
@@ -211,6 +235,9 @@ jobs:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # So the archive's bundle/codegen phases see the same
+          # tvOS gating as prebuild and pod install (see above).
+          EXPO_TV: '1'
         run: |
           xcodebuild archive \
             -workspace ios/HugbugStressReliefGames.xcworkspace \

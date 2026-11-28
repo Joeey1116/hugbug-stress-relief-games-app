@@ -20,6 +20,10 @@
 //     no-ops — every call site already treats them as best-effort
 //     with the AsyncStorage cache as source of truth).
 //
+//   - For tvOS bundles (platform === 'tvos'), the two modules in
+//     TVOS_MODULE_STUBS resolve to the tvOS stubs under
+//     src/tvos-stubs/ — see TVOS_MODULE_STUBS below.
+//
 // iOS / Android / web bundles pass through to Expo's resolver untouched.
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
@@ -43,6 +47,25 @@ const MACOS_MODULE_STUBS = {
   ),
 };
 
+// tvOS bundles (Nov 28, 2026): Google Sign-In's podspec declares
+// only ios, so react-native.config.js gates the pod out of the tvOS
+// install; expo-apple-authentication's podspec is likewise ios-only
+// and Expo autolinking filters it out of the tvOS install. Neither
+// native module exists on Apple TV, so their JS sides resolve to
+// these inert stubs — the same signed-out behavior as the macOS
+// stubs, with Firebase email auth (whose pods declare tvOS) still
+// working natively.
+const TVOS_MODULE_STUBS = {
+  '@react-native-google-signin/google-signin': path.resolve(
+    __dirname,
+    'src/tvos-stubs/google-signin.ts',
+  ),
+  'expo-apple-authentication': path.resolve(
+    __dirname,
+    'src/tvos-stubs/expo-apple-authentication.ts',
+  ),
+};
+
 const upstreamResolveRequest =
   typeof config.resolver.resolveRequest === 'function'
     ? config.resolver.resolveRequest
@@ -59,6 +82,12 @@ const RNSCREENS_MACOS_STUB = path.resolve(
 );
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === 'tvos') {
+    if (Object.prototype.hasOwnProperty.call(TVOS_MODULE_STUBS, moduleName)) {
+      return { type: 'sourceFile', filePath: TVOS_MODULE_STUBS[moduleName] };
+    }
+    return resolveDefault(context, moduleName, platform);
+  }
   if (platform === 'macos') {
     if (moduleName === 'react-native') {
       return context.resolveRequest(context, 'react-native-macos', platform);
