@@ -235,5 +235,178 @@ target 'hugbug-games-macOS' do
         end
       end
     end
+
+    # Add the react-native-macos fork's ReactCommon root to every
+    # pod target's HEADER_SEARCH_PATHS — the general form of the
+    # iostextinput fix above. The block above made
+    # <react/renderer/components/iostextinput/primitives.h> itself
+    # resolve, but that header's line 10 does
+    #   #include <react/renderer/components/textinput/basePrimitives.h>
+    # and basePrimitives.h lives at ReactCommon/react/renderer/
+    # components/textinput/basePrimitives.h — reachable only if a
+    # search path ends at the ReactCommon root, so the full
+    # react/renderer/... prefix resolves against the source tree.
+    # Under STATIC linkage (Flight Journal / Rewards) that prefix
+    # resolves for free through Pods/Headers/Public/React-Core,
+    # which symlinks the ReactCommon tree; under this target's
+    # DYNAMIC frameworks it is never populated, so the compiler
+    # reports the header "not found in framework 'react'"
+    # (React-Core.framework). macOS run #4 (head 4b76a23) proved the
+    # point: with the iostextinput fix in, the archive ran ~12
+    # minutes past the old failure and died at 27m44s compiling
+    # react-native-safe-area-context's
+    # RNCSafeAreaViewComponentView.mm (RCTConversions.h ->
+    # iostextinput primitives.h -> basePrimitives.h) on exactly
+    # this include. Renderer headers cross-include each other by
+    # this prefix throughout the tree (components, core, graphics,
+    # ...), so chasing them one directory per ~30-minute run is
+    # untenable; exposing the fork's ReactCommon root restores
+    # precisely the header visibility the static install has, for
+    # every pod target, using the same read-modify-write loop as
+    # the block above. The path can shadow nothing foreign: every
+    # header under it is the fork's own source, the same source the
+    # frameworks in this install were built from. Scoped to this
+    # macOS Podfile's post_install only; the iOS install (RN 0.86,
+    # whose podspecs populate the Public tree) is untouched.
+    react_common_dir = File.expand_path(
+      '../node_modules/react-native-macos/ReactCommon',
+      installer.config.installation_root)
+    quoted_react_common_dir = "\"#{react_common_dir}\""
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        existing_paths = config.build_settings['HEADER_SEARCH_PATHS']
+        case existing_paths
+        when Array
+          next if existing_paths.any? { |p| p.to_s.include?(react_common_dir) }
+
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            existing_paths + [quoted_react_common_dir]
+        when String
+          next if existing_paths.include?(react_common_dir)
+
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            "#{existing_paths} #{quoted_react_common_dir}"
+        else
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            "$(inherited) #{quoted_react_common_dir}"
+        end
+      end
+    end
+
+    # Trim react-native-reanimated 4.8.0's Fabric prop tables to
+    # the PropName members the react-native-macos 0.83 fork
+    # actually defines. Reanimated 4.8 targets RN 0.86, whose
+    # react/renderer/animationbackend/AnimatedProps.h declares a
+    # 52-member facebook::react::PropName enum; the fork's
+    # AnimatedProps.h declares exactly six:
+    #   OPACITY, WIDTH, HEIGHT, BORDER_RADII, FLEX, TRANSFORM
+    # Two reanimated headers name the other 46:
+    #   - Fabric/updates/propNameFromString.h — a 103-entry map
+    #     from JS prop names to PropName values (only the 18
+    #     entries naming the six fork members can compile);
+    #   - Fabric/updates/PropsLayoutFilter.h — the 29-entry
+    #     layoutPropNames set used by isLayoutProp() (only WIDTH,
+    #     HEIGHT, FLEX survive).
+    # Both headers are compiled by this Mac build:
+    # RNReanimated.podspec's "common" subspec globs
+    # Common/cpp/reanimated/**/*.{cpp,h} unconditionally, and
+    # UpdatesRegistry.cpp includes PropsLayoutFilter.h, which
+    # includes propNameFromString.h. Left alone, the archive dies
+    # on the first missing enumerator — the same failure that
+    # already killed a SimDeck Mac run. The patch below edits the
+    # two node_modules files in place (CI starts from a fresh
+    # `npm ci` each run and this hook reapplies the patch on every
+    # macOS pod install), dropping exactly the entries that name
+    # members the fork lacks. Runtime cost on macOS is nil for
+    # PropsLayoutFilter (shouldFilterNonLayoutProps() is
+    # Android-only; the set is never consulted on Apple platforms)
+    # and cosmetic for the map (a layout/animation prop outside
+    # the six simply misses reanimated's animated-props fast path
+    # on Mac). Like the SimDeck RNSVGImage patch (6e2ff66), this
+    # RAISES at pod install if a file's shape has changed —
+    # verified by re-scanning the patched text for any surviving
+    # reference to a member outside the fork's six — rather than
+    # failing silently ~30 minutes into an archive. Idempotent:
+    # an already-trimmed file verifies clean and is left alone.
+    # Scoped to this macOS Podfile's post_install only; iOS/tvOS
+    # installs never run it and keep the full tables against
+    # RN 0.86's complete enum.
+    reanimated_fork_prop_names = %w[OPACITY WIDTH HEIGHT BORDER_RADII FLEX TRANSFORM].freeze
+    reanimated_member_ref = /facebook::react::([A-Z][A-Z_0-9]*)\b/
+    reanimated_updates_dir = File.expand_path(
+      '../node_modules/react-native-reanimated/Common/cpp/reanimated/Fabric/updates',
+      installer.config.installation_root)
+
+    prop_name_from_string_h = File.join(reanimated_updates_dir,
+                                        'propNameFromString.h')
+    if File.exist?(prop_name_from_string_h)
+      contents = File.read(prop_name_from_string_h)
+      referenced = contents.scan(reanimated_member_ref).flatten.uniq
+      unless (referenced - reanimated_fork_prop_names).empty?
+        patched = contents.lines.reject do |line|
+          entry = line.match(/\{"[^"]+",\s*facebook::react::([A-Z][A-Z_0-9]*)\}/)
+          entry && !reanimated_fork_prop_names.include?(entry[1])
+        end.join
+        surviving = patched.scan(reanimated_member_ref).flatten.uniq -
+                    reanimated_fork_prop_names
+        unless surviving.empty?
+          raise 'propNameFromString.h: references to PropName members ' \
+                "#{surviving.join(', ')} survive the macOS trim — the " \
+                'file format has changed; re-check the Mac patch in ' \
+                'macos/Podfile.'
+        end
+        unless patched.include?('propNameFromString') &&
+               patched.include?('propNameMap') &&
+               reanimated_fork_prop_names.all? do |member|
+                 patched.include?("facebook::react::#{member}")
+               end
+          raise 'propNameFromString.h: the macOS trim damaged the ' \
+                'propNameMap — re-check the Mac patch in macos/Podfile.'
+        end
+
+        File.write(prop_name_from_string_h, patched)
+      end
+    end
+
+    props_layout_filter_h = File.join(reanimated_updates_dir,
+                                      'PropsLayoutFilter.h')
+    if File.exist?(props_layout_filter_h)
+      contents = File.read(props_layout_filter_h)
+      referenced = contents.scan(reanimated_member_ref).flatten.uniq
+      unless (referenced - reanimated_fork_prop_names).empty?
+        set_match = contents.match(
+          /(static const std::set<facebook::react::PropName> layoutPropNames = \{)(.*?)(\n\s*\};)/m)
+        unless set_match
+          raise 'PropsLayoutFilter.h: could not find the ' \
+                'layoutPropNames set — the file format has changed; ' \
+                're-check the Mac patch in macos/Podfile.'
+        end
+
+        kept_members = set_match[2].scan(reanimated_member_ref).flatten
+                                   .select do |member|
+                                     reanimated_fork_prop_names.include?(member)
+                                   end
+        if kept_members.empty?
+          raise 'PropsLayoutFilter.h: no layoutPropNames entries ' \
+                'survive the fork PropName trim — re-check the Mac ' \
+                'patch in macos/Podfile.'
+        end
+
+        rebuilt_set = "#{set_match[1]}\n      " \
+                      "#{kept_members.map { |m| "facebook::react::#{m}" }.join(', ')}," \
+                      "#{set_match[3]}"
+        patched = contents.sub(set_match[0]) { rebuilt_set }
+        surviving = patched.scan(reanimated_member_ref).flatten.uniq -
+                    reanimated_fork_prop_names
+        unless surviving.empty?
+          raise 'PropsLayoutFilter.h: references to PropName members ' \
+                "#{surviving.join(', ')} survive the macOS trim — " \
+                'the file format has changed; re-check the Mac patch ' \
+                'in macos/Podfile.'
+        end
+
+        File.write(props_layout_filter_h, patched)
+      end
+    end
   end
 end
