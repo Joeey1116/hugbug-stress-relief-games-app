@@ -414,6 +414,18 @@ function forEachTargetConfig(project, targetUuid, fn) {
 }
 
 function withAppClip(config) {
+  // tvOS rollout (Nov 27, 2026, mirroring the Flight Journal pilot):
+  // App Clips are iOS-only. When the @react-native-tvos/config-tv
+  // plugin converts the ios/ project for a tvOS build (EXPO_TV=1, set
+  // only by .github/workflows/tvos-build.yml), this plugin must be a
+  // complete no-op: no clip files, no clip target, no per-target
+  // profile changes — config-tv rewrites EVERY target in the project
+  // for tvOS, and a clip target would be converted/broken. With
+  // EXPO_TV unset (every iOS/Android/macOS/web build), behavior is
+  // byte-for-byte what it was before this guard existed.
+  if (process.env.EXPO_TV === '1' || process.env.EXPO_TV === 'true') {
+    return config;
+  }
   return withXcodeProject(config, async (config) => {
     const project = config.modResults;
     const iosRoot = config.modRequest.platformProjectRoot;
