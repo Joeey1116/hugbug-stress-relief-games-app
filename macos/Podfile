@@ -467,5 +467,287 @@ target 'hugbug-games-macOS' do
         File.write(props_layout_filter_h, patched)
       end
     end
+
+    # Adapt react-native-reanimated 4.8.0's AnimationBackend code
+    # to the react-native-macos 0.83 fork's older backend API.
+    # Reanimated 4.8 targets RN 0.86's shared AnimationBackend
+    # interface (react/renderer/animationbackend/AnimationBackend.h
+    # + uimanager/UIManagerAnimationBackend.h):
+    #   struct AnimationMutation { Tag tag;
+    #     std::shared_ptr<const ShadowNodeFamily> family;
+    #     AnimatedProps props; bool hasLayoutUpdates; };
+    #   struct AnimationMutations {
+    #     std::vector<AnimationMutation> batch;
+    #     std::set<SurfaceId> asyncFlushSurfaces; };
+    #   using AnimationTimestamp =
+    #     std::chrono::duration<double, std::milli>;
+    #   using CallbackId = uint64_t;
+    #   UIManagerAnimationBackend::start(Callback) -> CallbackId,
+    #     stop(CallbackId), pushAnimationMutations(Callback).
+    # The fork predates that API:
+    #   struct AnimationMutation { Tag tag;
+    #     const ShadowNodeFamily *family; AnimatedProps props; };
+    #   using AnimationMutations = std::vector<AnimationMutation>;
+    #   UIManagerAnimationBackend declares only
+    #     onAnimationFrame(double) and stop(bool isAsync); the
+    #     concrete AnimationBackend adds start(Callback, bool)
+    #     whose Callback is
+    #     std::function<AnimationMutations(float)>.
+    # SimDeck's Mac run #4 (reanimated 4.7.1) proved the wall: its
+    # archive died in UpdatesRegistry.cpp on "no member named
+    # 'batch'" and the Shared -> raw-pointer conversion. Hugbug's
+    # 4.8.0 uses the same newer API in exactly three files
+    # (verified by sweeping the whole Common + apple native
+    # trees):
+    #   - Fabric/updates/UpdatesRegistry.cpp — one
+    #     mutations.batch.push_back(AnimationMutation{... Shared
+    #     ..., false}) in flushNonLayoutUpdates;
+    #   - NativeModules/ReanimatedModuleProxy.cpp — .batch
+    #     throughout mutationsFromAnimatedPropsBatch /
+    #     runGrandCallback, plus ->start / ->stop(CallbackId) /
+    #     ->pushAnimationMutations in startBackendIfNeeded /
+    #     stopBackendIfIdle / handleEventAndFlush;
+    #   - NativeModules/ReanimatedModuleProxy.h — the
+    #     AnimationTimestamp / CallbackId type names themselves.
+    # Nothing else in the tree touches the newer surface (no
+    # asyncFlushSurfaces use anywhere — reanimated never writes
+    # that field, so the fork's plain vector loses nothing).
+    #
+    # Runtime stakes here are nil, by construction: every patched
+    # site lives on the USE_ANIMATION_BACKEND path, which this
+    # app does not enable (reanimated's staticFlags.json default
+    # is false and package.json has no staticFeatureFlags
+    # override; both handleEventAndFlush call sites and the
+    # start/stop bodies sit inside `if constexpr` on that flag,
+    # and initializeFabric asserts if the flag were ever on
+    # without RN's shared backend, which the fork lacks). The
+    # path that actually runs on Apple — performOperations, the
+    # commit hook, synchronouslyUpdateUIPropsFunction_ — never
+    # touches AnimationMutations. The patch therefore only has
+    # to make the dead path COMPILE, in the fork's own calling
+    # conventions, without changing what the live path does:
+    #   - mutations.batch.X -> mutations.X (the fork type IS
+    #     the vector);
+    #   - AnimationMutation{tag, family(Shared), props, flag}
+    #     -> {tag, family.get(), props} — raw family pointers
+    #     are the fork backend's own design (it consumes them
+    #     synchronously inside onAnimationFrame while the
+    #     registry entries owning the Shared families outlive
+    #     the flush; this is the arrangement RN 0.83 shipped),
+    #     and the dropped hasLayoutUpdates flag has no consumer
+    #     here: the fork backend recomputes layout-ness from
+    #     the typed props (mutationHasLayoutUpdates checks
+    #     WIDTH / HEIGHT / FLEX — after the PropName trim above,
+    #     reanimated's isLayoutProp knows exactly the same set
+    #     on this platform, so the flag carried no extra
+    #     information);
+    #   - ->start(cb) -> the concrete fork backend's
+    #     start(cb, true) via static_pointer_cast, with a dummy
+    #     callback id (the fork has no per-callback ids);
+    #   - ->stop(id) -> ->stop(true), the base interface's own
+    #     stop(bool);
+    #   - ->pushAnimationMutations(cb) -> run the flush
+    #     synchronously with the current timestamp, mirroring
+    #     the legacy event path (the fork has no one-shot
+    #     queue; the returned mutations are dropped because the
+    #     fork backend applies mutations only from its frame
+    #     callback, which the disabled flag never starts);
+    #   - AnimationTimestamp / CallbackId -> aliases injected
+    #     into ReanimatedModuleProxy.h with upstream's exact
+    #     definitions (the fork defines neither name anywhere).
+    # Like the PropName trim above, this edits the node_modules
+    # files in place at Mac pod install, verifies by re-scanning
+    # for every fork-missing token, and RAISES here — not ~30
+    # minutes into an archive — if a file's shape has changed.
+    # Idempotent: a file whose anchors are all gone and which
+    # references no forbidden token verifies clean and is left
+    # alone; a partly-patched file raises. Scoped to this macOS
+    # Podfile's post_install only; the iOS install compiles the
+    # same sources against RN 0.86's real API, untouched.
+    reanimated_native_dir = File.expand_path(
+      '../node_modules/react-native-reanimated/Common/cpp/reanimated',
+      installer.config.installation_root)
+    fork_compat_forbidden = ['.batch', 'pushAnimationMutations',
+                             'mutation.hasLayoutUpdates'].freeze
+
+    reanimated_anchor_patch = lambda do |path, pairs, extra_forbidden|
+      unless File.exist?(path)
+        raise "Reanimated fork-compat patch: #{path} not found — " \
+              're-check the Mac patch in macos/Podfile.'
+      end
+
+      contents = File.read(path)
+      forbidden = fork_compat_forbidden + extra_forbidden
+      if pairs.map(&:first).none? { |anchor| contents.include?(anchor) }
+        surviving = forbidden.select { |token| contents.include?(token) }
+        unless surviving.empty?
+          raise "Reanimated fork-compat patch: #{File.basename(path)} " \
+                'has no patch anchors left but still references ' \
+                "#{surviving.join(', ')} — the file format has " \
+                'changed; re-check the Mac patch in macos/Podfile.'
+        end
+
+        next
+      end
+
+      pairs.each do |anchor, replacement|
+        unless contents.include?(anchor)
+          raise "Reanimated fork-compat patch: anchor not found in " \
+                "#{File.basename(path)}: #{anchor.lines.first.strip} — " \
+                'the file format has changed (or a previous patch ' \
+                'only partly applied); re-check the Mac patch in ' \
+                'macos/Podfile.'
+        end
+
+        contents = contents.sub(anchor) { replacement }
+      end
+      surviving = forbidden.select { |token| contents.include?(token) }
+      unless surviving.empty?
+        raise "Reanimated fork-compat patch: #{File.basename(path)} " \
+              "still references #{surviving.join(', ')} after " \
+              'patching — re-check the Mac patch in macos/Podfile.'
+      end
+
+      File.write(path, contents)
+    end
+
+    # (a) Type aliases in ReanimatedModuleProxy.h.
+    reanimated_proxy_h = File.join(reanimated_native_dir,
+                                   'NativeModules',
+                                   'ReanimatedModuleProxy.h')
+    unless File.exist?(reanimated_proxy_h)
+      raise "Reanimated fork-compat patch: #{reanimated_proxy_h} " \
+            'not found — re-check the Mac patch in macos/Podfile.'
+    end
+
+    proxy_h_contents = File.read(reanimated_proxy_h)
+    if proxy_h_contents.include?('HUGBUG MACOS FORK COMPAT (aliases)')
+      unless proxy_h_contents.include?(
+               'using AnimationTimestamp = std::chrono::duration<double, std::milli>;') &&
+             proxy_h_contents.include?('using CallbackId = std::uint64_t;')
+        raise 'Reanimated fork-compat patch: ' \
+              'ReanimatedModuleProxy.h carries the fork-compat ' \
+              'marker but not the aliases — re-check the Mac ' \
+              'patch in macos/Podfile.'
+      end
+    else
+      proxy_h_anchor = "#include <react/renderer/uimanager/UIManagerAnimationBackend.h>\n"
+      unless proxy_h_contents.include?(proxy_h_anchor)
+        raise 'Reanimated fork-compat patch: include anchor not ' \
+              'found in ReanimatedModuleProxy.h — the file format ' \
+              'has changed; re-check the Mac patch in macos/Podfile.'
+      end
+
+      proxy_h_alias_block = <<-'CPP'
+// HUGBUG MACOS FORK COMPAT (aliases): upstream RN's
+// UIManagerAnimationBackend.h defines AnimationTimestamp and
+// CallbackId, which the declarations in this header use; the
+// react-native-macos 0.83 fork's header predates the shared
+// AnimationBackend API and defines neither. Provide both with
+// exactly upstream's definitions so this header compiles against
+// the fork. They are only used by the USE_ANIMATION_BACKEND code
+// paths, which this app does not enable.
+#include <chrono>
+namespace facebook::react {
+using AnimationTimestamp = std::chrono::duration<double, std::milli>;
+using CallbackId = std::uint64_t;
+} // namespace facebook::react
+      CPP
+      proxy_h_contents = proxy_h_contents.sub(proxy_h_anchor) do
+        "#{proxy_h_anchor}\n#{proxy_h_alias_block}"
+      end
+      File.write(reanimated_proxy_h, proxy_h_contents)
+    end
+
+    # (b) UpdatesRegistry.cpp — the flushNonLayoutUpdates site.
+    reanimated_anchor_patch.call(
+      File.join(reanimated_updates_dir, 'UpdatesRegistry.cpp'),
+      [[<<-'CPP'.chomp, <<-'CPP'.chomp]],
+      mutations.batch.push_back(
+          AnimationMutation{shadowNodeFamily->getTag(), shadowNodeFamily, std::move(nonLayoutProps), false});
+      CPP
+      mutations.push_back(
+          AnimationMutation{shadowNodeFamily->getTag(), shadowNodeFamily.get(), std::move(nonLayoutProps)});
+      CPP
+      ['AnimationMutation{shadowNodeFamily->getTag(), shadowNodeFamily,'])
+
+    # (c) ReanimatedModuleProxy.cpp — batch sites + backend calls.
+    reanimated_anchor_patch.call(
+      File.join(reanimated_native_dir, 'NativeModules',
+                'ReanimatedModuleProxy.cpp'),
+      [
+        [<<-'CPP'.chomp, <<-'CPP'.chomp],
+    animationBackendCallbackId_ =
+        getAnimationBackend()->start([weakThis = weak_from_this()](AnimationTimestamp timestamp) {
+          auto strongThis = weakThis.lock();
+          if (!strongThis) {
+            return AnimationMutations{};
+          }
+          return strongThis->runGrandCallback(timestamp, GrandCallbackSource::AnimationLoop);
+        });
+        CPP
+    // HUGBUG MACOS FORK COMPAT: the fork's UIManagerAnimationBackend
+    // declares no start(); its concrete AnimationBackend takes
+    // start(callback, isAsync) with a float-timestamp callback
+    // returning the same AnimationMutations value, and has no
+    // per-callback ids (hence the dummy id below). This branch only
+    // runs with USE_ANIMATION_BACKEND enabled, which this app does
+    // not enable.
+    auto forkAnimationBackend =
+        std::static_pointer_cast<facebook::react::AnimationBackend>(getAnimationBackend());
+    forkAnimationBackend->start(
+        [weakThis = weak_from_this()](float timestamp) {
+          auto strongThis = weakThis.lock();
+          if (!strongThis) {
+            return AnimationMutations{};
+          }
+          return strongThis->runGrandCallback(
+              AnimationTimestamp{timestamp}, GrandCallbackSource::AnimationLoop);
+        },
+        true);
+    animationBackendCallbackId_ = 1;
+        CPP
+        ['      getAnimationBackend()->stop(animationBackendCallbackId_);',
+         '      getAnimationBackend()->stop(true);'],
+        ['  mutations.batch.reserve(animatedPropsBatch.size());',
+         '  mutations.reserve(animatedPropsBatch.size());'],
+        ['      mutationIndexByTag.emplace(tag, mutations.batch.size());',
+         '      mutationIndexByTag.emplace(tag, mutations.size());'],
+        ['      mutations.batch.push_back(AnimationMutation{tag, shadowNodeFamily, std::move(animatedProps), hasLayoutUpdates});',
+         '      mutations.push_back(AnimationMutation{tag, shadowNodeFamily.get(), std::move(animatedProps)});'],
+        [<<-'CPP'.chomp, <<-'CPP'.chomp],
+      auto &mutation = mutations.batch[it->second];
+      mutation.hasLayoutUpdates |= hasLayoutUpdates;
+        CPP
+      auto &mutation = mutations[it->second];
+        CPP
+        ['        stopBackendIfIdle(!mutations.batch.empty());',
+         '        stopBackendIfIdle(!mutations.empty());'],
+        [<<-'CPP'.chomp, <<-'CPP'.chomp],
+  bool handled = false;
+  getAnimationBackend()->pushAnimationMutations([&, source](AnimationTimestamp timestamp) {
+    handled = handleEvent(eventName, emitterReactTag, payload, timestamp.count());
+    return runGrandCallback(timestamp, source);
+  });
+  return handled;
+        CPP
+  bool handled = false;
+  // HUGBUG MACOS FORK COMPAT: the fork's AnimationBackend has no
+  // one-shot mutation queue, and with USE_ANIMATION_BACKEND
+  // disabled this function is never called (both call sites are
+  // flag-gated). Run the flush synchronously with the current
+  // timestamp, mirroring the legacy event path; the returned
+  // mutations are dropped because the fork backend applies
+  // mutations only from its frame callback, which the disabled
+  // flag never starts.
+  const auto forkCompatTimestamp = AnimationTimestamp{getAnimationTimestamp_()};
+  handled = handleEvent(eventName, emitterReactTag, payload, forkCompatTimestamp.count());
+  runGrandCallback(forkCompatTimestamp, source);
+  return handled;
+        CPP
+      ],
+      ['AnimationMutation{tag, shadowNodeFamily,',
+       'getAnimationBackend()->start(',
+       'stop(animationBackendCallbackId_)'])
   end
 end
