@@ -32,12 +32,18 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
+    "react-native-gesture-handler": "^3.5.0",
+    "react-native-reanimated": "^4.8.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
-    "react-native-web": "^0.21.4"
+    "react-native-web": "^0.21.4",
+    "react-native-worklets": "^0.13.1"
   },
   "devDependencies": {
+    "@react-native-community/cli": "^20.2.0",
+    "@react-native/metro-config": "^0.86.3",
     "@types/react": "~19.2.0",
+    "react-native-macos": "^0.83.0",
     "typescript": "~6.0.3"
   },
   "main": "expo-router/entry",
@@ -47,7 +53,9 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "start": "expo start",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "run:macos": "react-native run-macos",
+    "typecheck": "tsc --noEmit"
   },
   "version": "1.0.0"
 }
