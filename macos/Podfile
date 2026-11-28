@@ -293,6 +293,65 @@ target 'hugbug-games-macOS' do
       end
     end
 
+    # ALSO expose the fork's renderer tree through the sandbox's
+    # Public headers directory — a symlink Pods/Headers/Public/react
+    # -> node_modules/react-native-macos/ReactCommon/react — because
+    # the project-level append above does not reach every target.
+    # The appends in the two blocks above write only PROJECT-level
+    # build settings, and that mechanism demonstrably works for
+    # ordinary pod targets: the iostextinput append is what let
+    # react-native-safe-area-context resolve primitives.h itself in
+    # macOS run #4. But the targets that compile the renderer
+    # sources — React-Fabric (whose "core" subspec declares
+    # HEADER_SEARCH_PATHS in its pod_target_xcconfig) and
+    # React-FabricComponents (whose top-level pod_target_xcconfig
+    # does the same) — compose their effective search paths with
+    # their own podspec xcconfigs, and macOS run #5 (head 616f337,
+    # with the ReactCommon append in place) proved the composed
+    # value in effect for the failing target still lacked the
+    # ReactCommon root: it died 14m57s into the archive on the same
+    # basePrimitives.h include, this time compiling the renderer's
+    # own textinput sources. Rather than fight per-target setting
+    # composition, this restores the one layout that resolves every
+    # <react/renderer/...> include for every pod target at once:
+    # the sandbox Public headers tree, which is a composed-in search
+    # root for pod targets in both linkage modes (run #4's own
+    # compiler note resolved React-Core.framework through
+    # Pods/Headers/Public) and is exactly where the STATIC installs
+    # (Flight Journal / Rewards) get this tree from CocoaPods
+    # directly. Like the glog modulemap rewrite above, the symlink
+    # is a sandbox edit reapplied by every macOS pod install (CI
+    # starts from a fresh install each run), and it FAILS LOUD here
+    # — rather than ~15 minutes into an archive — if the sandbox
+    # layout is ever not what this expects. Scoped to this macOS
+    # Podfile's post_install only; the iOS install populates the
+    # Public tree itself and is untouched.
+    require 'fileutils'
+
+    fork_react_tree = File.expand_path(
+      '../node_modules/react-native-macos/ReactCommon/react',
+      installer.config.installation_root)
+    sandbox_react_link = File.join(
+      installer.sandbox.public_headers.root, 'react')
+    react_probe = File.join('renderer', 'components', 'textinput',
+                            'basePrimitives.h')
+    unless File.exist?(File.join(sandbox_react_link, react_probe))
+      if File.exist?(sandbox_react_link) || File.symlink?(sandbox_react_link)
+        raise 'Pods/Headers/Public/react exists but does not ' \
+              "resolve #{react_probe} — unexpected sandbox layout; " \
+              're-check the Mac patch in macos/Podfile.'
+      end
+
+      FileUtils.mkdir_p(File.dirname(sandbox_react_link))
+      File.symlink(fork_react_tree, sandbox_react_link)
+      unless File.exist?(File.join(sandbox_react_link, react_probe))
+        raise 'Linking the fork ReactCommon/react tree into ' \
+              'Pods/Headers/Public did not make ' \
+              "#{react_probe} resolvable — re-check the Mac patch " \
+              'in macos/Podfile.'
+      end
+    end
+
     # Trim react-native-reanimated 4.8.0's Fabric prop tables to
     # the PropName members the react-native-macos 0.83 fork
     # actually defines. Reanimated 4.8 targets RN 0.86, whose
