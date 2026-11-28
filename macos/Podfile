@@ -173,5 +173,67 @@ target 'hugbug-games-macOS' do
       File.delete(modulemap_path)
       File.write(modulemap_path, glog_textual_modulemap)
     end
+
+    # Add the react-native-macos fork's iostextinput header directory
+    # to every pod target's HEADER_SEARCH_PATHS. React-RCTFabric's
+    # RCTConversions.h (shipped inside the built RCTFabric.framework)
+    # does, under '#if TARGET_OS_OSX',
+    #   #import <react/renderer/components/iostextinput/primitives.h>
+    # and the fork keeps that header at
+    # ReactCommon/react/renderer/components/textinput/platform/ios/
+    # react/renderer/components/iostextinput/primitives.h — it only
+    # resolves if that platform/ios directory is on the search path.
+    # Under STATIC linkage (the Flight Journal / Rewards Mac builds,
+    # which have no use_frameworks!) it resolves for free: the
+    # iostextinput subspec of React-FabricComponents declares
+    # header_dir 'react/renderer/components/iostextinput', so
+    # CocoaPods links the header into Pods/Headers/Public/react/
+    # renderer/components/iostextinput/, which every pod target
+    # searches. Under DYNAMIC frameworks — required on this target
+    # by react-native-firebase's SPM integration (see the
+    # use_frameworks! note above) — headers stay inside their own
+    # .framework and that Public path is never populated;
+    # react_native_post_install compensates for a fixed list of
+    # framework header paths (graphics/platform/ios,
+    # imagemanager/platform/ios, view/platform/cxx,
+    # runtimeexecutor/platform/ios, ...) but NOT this one, so the
+    # first pod target that pulls in RCTConversions.h dies:
+    # "RCTConversions.h:18:9: fatal error:
+    # 'react/renderer/components/iostextinput/primitives.h' file not
+    # found" (macOS run #3, head d113db8, compiling
+    # react-native-safe-area-context's RNCSafeAreaViewComponentView.o
+    # after ~27 min of archive). The directory added here contains
+    # only the react/renderer/components/iostextinput/ tree, so the
+    # extra path can shadow nothing; it is appended (via the same
+    # read-modify-write of build_settings that RN's own
+    # update_header_paths_if_depends_on performs, preserving
+    # $(inherited)) to all pod targets, since any Fabric consumer —
+    # React-RCTFabric itself included — can hit the same include.
+    # Scoped to this macOS Podfile's post_install only; the iOS
+    # install (static RN 0.86 podspecs, no fork) is untouched.
+    iostextinput_header_dir = File.expand_path(
+      '../node_modules/react-native-macos/ReactCommon/react/renderer/components/textinput/platform/ios',
+      installer.config.installation_root)
+    quoted_iostextinput_dir = "\"#{iostextinput_header_dir}\""
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        existing_paths = config.build_settings['HEADER_SEARCH_PATHS']
+        case existing_paths
+        when Array
+          next if existing_paths.any? { |p| p.to_s.include?(iostextinput_header_dir) }
+
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            existing_paths + [quoted_iostextinput_dir]
+        when String
+          next if existing_paths.include?(iostextinput_header_dir)
+
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            "#{existing_paths} #{quoted_iostextinput_dir}"
+        else
+          config.build_settings['HEADER_SEARCH_PATHS'] =
+            "$(inherited) #{quoted_iostextinput_dir}"
+        end
+      end
+    end
   end
 end
